@@ -150,3 +150,4 @@ func TestService_UpdateAndDeleteUser(t *testing.T) {
 	_, err = svc.GetUserProfile(ctx, user.ID)
 	assert.ErrorIs(t, err, ErrUserNotFound)
 }
+
