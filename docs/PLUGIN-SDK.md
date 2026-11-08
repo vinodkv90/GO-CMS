@@ -83,3 +83,4 @@ Plugins can extend the CMS across several well-defined boundaries:
 - **API Endpoints & Middleware:** Mount scoped REST endpoints under `/api/v1/plugins/:id/`.
 - **Background Jobs:** Register recurring or event-driven tasks processed by the CMS job worker pool.
 - **Storage & Search Providers:** Register new cloud storage adapters or search backends.
+

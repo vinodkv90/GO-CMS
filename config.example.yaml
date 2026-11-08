@@ -1,7 +1,7 @@
 # Go CMS Configuration
 
 server:
-  host: "0.0.0.0"
+  host: "localhost"
   port: 8080
   env: "development" # "development", "staging", "production"
   read_timeout: 15s
@@ -17,10 +17,10 @@ server:
 database:
   driver: "postgres" # "postgres", "mysql", "mongodb"
   host: "localhost"
-  port: 5432
-  user: "cms"
-  password: "cms_secret_password"
-  database: "cms_db"
+  port: 5433
+  user: "postgres"
+  password: "gGrGMAgsmHMqeKsI8FyDJ1FX0QkW3xsf"
+  database: "go_cms_db"
   ssl_mode: "disable"
   max_open_conns: 25
   max_idle_conns: 10
@@ -32,8 +32,8 @@ logging:
   format: "text" # "text", "json"
 
 auth:
-  jwt_secret: "change-this-to-a-secure-random-32-byte-key"
-  session_secret: "change-this-to-a-secure-session-key"
+  jwt_secret: "l3tjtNwOdnscoSemHT-vWv240XzubH4LGtGNViOY0vU"
+  session_secret: "vzvl-gotRFkn75EzKCSux1pY2l7nxzit5VVFfbd5IgE"
   token_expiration: 24h
 
 media:
@@ -52,3 +52,4 @@ themes:
 
 plugins:
   plugins_dir: "./plugins"
+

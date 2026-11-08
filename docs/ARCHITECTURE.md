@@ -132,3 +132,4 @@ The CMS supports two tenancy models configurable at startup or per tenant:
 - External plugins run out-of-process or inside a sandboxed WebAssembly (Wasm) runtime (via `wazero`), communicating via strictly typed RPC.
 - Plugins register custom fields, lifecycle hooks, API endpoints, and admin UI widgets.
 - Core CMS operations never block indefinitely on plugin execution: strict timeouts, circuit breakers, and capability allowances isolate core stability.
+

@@ -90,3 +90,4 @@ When an operation requires a capability:
    - For **Foreign Keys in MongoDB:** Application-level referential integrity verification runs inside the service layer before deletion or creation.
    - For **Transactions in Standalone MongoDB:** If transactions are requested but the MongoDB instance is a single node without a replica set, the CMS emits an explicit actionable error explaining that replica sets are required for transactions.
 4. The CMS never silently ignores a required capability. If an invariant cannot be guaranteed, the operation fails with a clear, descriptive domain error.
+

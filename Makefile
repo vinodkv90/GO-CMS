@@ -38,3 +38,4 @@ docker-up:
 # Stop all containers
 docker-down:
 	docker compose down
+

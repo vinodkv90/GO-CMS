@@ -116,3 +116,4 @@ func (p *PostgresDB) QueryRowContext(ctx context.Context, query string, args ...
 func (p *PostgresDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return p.db.BeginTx(ctx, opts)
 }
+

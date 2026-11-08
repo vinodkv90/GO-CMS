@@ -109,3 +109,4 @@ func (m *MySQLDB) QueryRowContext(ctx context.Context, query string, args ...any
 func (m *MySQLDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return m.db.BeginTx(ctx, opts)
 }
+

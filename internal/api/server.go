@@ -102,3 +102,4 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down CMS HTTP server...")
 	return s.httpServer.Shutdown(ctx)
 }
+

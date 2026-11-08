@@ -197,3 +197,4 @@ Templates leverage Go template blocks for clean inheritance:
 
 - **Development Mode (`APP_ENV=development`):** Templates are parsed on every incoming request, enabling instantaneous live reload upon editing HTML/CSS.
 - **Production Mode (`APP_ENV=production`):** All layouts, partials, and page templates are pre-parsed into a synchronized, concurrent-safe template cache (`sync.RWMutex`), rendering responses in sub-millisecond execution times.
+

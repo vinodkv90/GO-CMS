@@ -7,15 +7,15 @@ services:
     container_name: cms-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: cms
-      POSTGRES_PASSWORD: cms_secret_password
-      POSTGRES_DB: cms_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: go_cms_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cms -d cms_db"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d go_cms_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -90,9 +90,9 @@ services:
       CMS_DB_DRIVER: "postgres"
       CMS_DB_HOST: "postgres"
       CMS_DB_PORT: 5432
-      CMS_DB_USER: "cms"
-      CMS_DB_PASSWORD: "cms_secret_password"
-      CMS_DB_NAME: "cms_db"
+      CMS_DB_USER: "postgres"
+      CMS_DB_PASSWORD: "root"
+      CMS_DB_NAME: "go_cms_db"
       CMS_DB_SSLMODE: "disable"
       CMS_AUTH_JWT_SECRET: "development-jwt-super-secret-key-32chars"
       CMS_AUTH_SESSION_SECRET: "development-session-super-secret-key"
@@ -113,3 +113,4 @@ volumes:
   mongo_data:
   redis_data:
   uploads_data:
+

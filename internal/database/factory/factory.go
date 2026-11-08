@@ -26,3 +26,4 @@ func Connect(ctx context.Context, cfg config.DatabaseConfig) (interfaces.Databas
 		return nil, fmt.Errorf("unsupported database driver: %q", cfg.Driver)
 	}
 }
+

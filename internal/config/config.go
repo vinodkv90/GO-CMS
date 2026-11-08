@@ -104,7 +104,7 @@ func DefaultConfig() *Config {
 			Host:            "localhost",
 			Port:            5432,
 			User:            "cms",
-			Password:        "cms_secret",
+			Password:        "cms_secret_password",
 			Database:        "cms_db",
 			SSLMode:         "disable",
 			MaxOpenConns:    25,
@@ -145,6 +145,12 @@ func DefaultConfig() *Config {
 // Load loads configuration from an optional file and applies environment variable overrides.
 func Load(configPath string) (*Config, error) {
 	cfg := DefaultConfig()
+
+	if configPath == "" {
+		if _, err := os.Stat("config.yaml"); err == nil {
+			configPath = "config.yaml"
+		}
+	}
 
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
@@ -258,3 +264,4 @@ func (c *Config) Validate() error {
 
 	return nil
 }
+

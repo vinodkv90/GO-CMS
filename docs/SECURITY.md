@@ -77,3 +77,4 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
 - **Argon2id Password Hashing:** Memory: 64MB, Iterations: 3, Parallelism: 2.
 - **Granular Permissions:** Every resource is evaluated against user roles (`content:articles:read`, `content:articles:publish`, `media:upload`, etc.).
 - **Account Lockout & Rate Limiting:** Progressive delay and account lockout after repeated failed login attempts.
+

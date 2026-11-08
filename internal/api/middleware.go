@@ -65,3 +65,4 @@ func StructuredLoggerMiddleware(logger *slog.Logger) func(next http.Handler) htt
 		})
 	}
 }
+

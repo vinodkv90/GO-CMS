@@ -165,3 +165,4 @@ func TestApiV1Ping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pong", body["message"])
 }
+
