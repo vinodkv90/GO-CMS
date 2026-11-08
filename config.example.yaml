@@ -1,0 +1,54 @@
+# Go CMS Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  env: "development" # "development", "staging", "production"
+  read_timeout: 15s
+  write_timeout: 30s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
+  cors_allowed_origins:
+    - "*"
+  trusted_proxies:
+    - "127.0.0.1/32"
+    - "::1/128"
+
+database:
+  driver: "postgres" # "postgres", "mysql", "mongodb"
+  host: "localhost"
+  port: 5432
+  user: "cms"
+  password: "cms_secret_password"
+  database: "cms_db"
+  ssl_mode: "disable"
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 5m
+
+logging:
+  level: "info" # "debug", "info", "warn", "error"
+  format: "text" # "text", "json"
+
+auth:
+  jwt_secret: "change-this-to-a-secure-random-32-byte-key"
+  session_secret: "change-this-to-a-secure-session-key"
+  token_expiration: 24h
+
+media:
+  provider: "local" # "local", "s3", "gcs", "azure", "minio"
+  upload_dir: "./uploads"
+  signed_urls:
+    enabled: true
+    algorithm: "HMAC-SHA256"
+    expiration: 1h
+    secret_key: "change-this-to-a-secure-media-signing-key"
+
+themes:
+  active_theme: "default"
+  themes_dir: "./themes"
+  cache: false
+
+plugins:
+  plugins_dir: "./plugins"

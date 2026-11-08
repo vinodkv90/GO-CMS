@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # Primary Database (PostgreSQL 16)
+  postgres:
+    image: postgres:16-alpine
+    container_name: cms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cms
+      POSTGRES_PASSWORD: cms_secret_password
+      POSTGRES_DB: cms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cms -d cms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Alternative Relational Database (MySQL 8.4 LTS)
+  mysql:
+    image: mysql:8.4
+    container_name: cms-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secret_password
+      MYSQL_DATABASE: cms_db
+      MYSQL_USER: cms
+      MYSQL_PASSWORD: cms_secret_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "cms", "-pcms_secret_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Document Database (MongoDB 7.0)
+  mongodb:
+    image: mongo:7.0
+    container_name: cms-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cms_root
+      MONGO_INITDB_ROOT_PASSWORD: mongo_secret_password
+      MONGO_INITDB_DATABASE: cms_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Cache and Distributed Coordination (Redis 7)
+  redis:
+    image: redis:7-alpine
+    container_name: cms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Go CMS Application Server
+  cms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cms-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      CMS_SERVER_HOST: "0.0.0.0"
+      CMS_SERVER_PORT: 8080
+      CMS_SERVER_ENV: "development"
+      CMS_DB_DRIVER: "postgres"
+      CMS_DB_HOST: "postgres"
+      CMS_DB_PORT: 5432
+      CMS_DB_USER: "cms"
+      CMS_DB_PASSWORD: "cms_secret_password"
+      CMS_DB_NAME: "cms_db"
+      CMS_DB_SSLMODE: "disable"
+      CMS_AUTH_JWT_SECRET: "development-jwt-super-secret-key-32chars"
+      CMS_AUTH_SESSION_SECRET: "development-session-super-secret-key"
+      CMS_MEDIA_SIGNED_SECRET: "development-media-signed-hmac-key"
+    volumes:
+      - uploads_data:/app/uploads
+      - ./themes:/app/themes
+      - ./plugins:/app/plugins
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  mysql_data:
+  mongo_data:
+  redis_data:
+  uploads_data:

@@ -1,0 +1,27 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage output
+*.out
+coverage.html
+
+# Uploads and temporary data
+uploads/*
+!uploads/.gitkeep
+
+# Environment and local configs
+.env
+config.yaml
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
