@@ -147,3 +147,4 @@ func (m *MemoryRepository) Delete(ctx context.Context, id string) error {
 	delete(m.assets, id)
 	return nil
 }
+

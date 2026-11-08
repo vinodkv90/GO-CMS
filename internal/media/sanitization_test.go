@@ -38,3 +38,4 @@ func TestGenerateStorageKey(t *testing.T) {
 	assert.Contains(t, key, "/")
 	assert.Contains(t, key, id)
 }
+

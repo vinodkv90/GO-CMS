@@ -40,3 +40,4 @@ type StorageProvider interface {
 	// URL returns the public or relative access URL for the given key.
 	URL(ctx context.Context, key string) (string, error)
 }
+

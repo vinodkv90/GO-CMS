@@ -157,3 +157,4 @@ func (p *Provider) URL(ctx context.Context, key string) (string, error) {
 	cleanKey := strings.TrimPrefix(filepath.ToSlash(key), "/")
 	return fmt.Sprintf("%s/%s", p.urlPrefix, cleanKey), nil
 }
+

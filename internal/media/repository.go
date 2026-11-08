@@ -30,3 +30,4 @@ type Repository interface {
 	// Delete removes a media record from the database.
 	Delete(ctx context.Context, id string) error
 }
+
