@@ -14,6 +14,7 @@ import (
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
+	"github.com/go-cms/cms/internal/media"
 	"github.com/go-cms/cms/internal/templates"
 )
 
@@ -23,6 +24,7 @@ type Server struct {
 	db         interfaces.Database
 	authSvc    *auth.Service
 	contentSvc *content.Service
+	mediaSvc   *media.Service
 	renderer   *templates.Renderer
 	logger     *slog.Logger
 	router     *chi.Mux
@@ -35,6 +37,7 @@ func NewServer(
 	db interfaces.Database,
 	authSvc *auth.Service,
 	contentSvc *content.Service,
+	mediaSvc *media.Service,
 	renderer *templates.Renderer,
 	logger *slog.Logger,
 ) *Server {
@@ -86,9 +89,20 @@ func NewServer(
 			contentHandler := content.NewHandler(contentSvc)
 			contentHandler.RegisterRoutes(api)
 		}
+
+		if mediaSvc != nil {
+			mediaHandler := media.NewHandler(mediaSvc, cfg)
+			mediaHandler.RegisterRoutes(api)
+		}
 	})
 
-	// 6. Mount Traditional Web CMS Routes (Renderer)
+	// 6. Mount Static Uploaded Files
+	if mediaSvc != nil {
+		mediaHandler := media.NewHandler(mediaSvc, cfg)
+		mediaHandler.MountFileServer(r)
+	}
+
+	// 7. Mount Traditional Web CMS Routes (Renderer)
 	if renderer != nil {
 		renderer.MountWebRoutes(r)
 	}
@@ -107,6 +121,7 @@ func NewServer(
 		db:         db,
 		authSvc:    authSvc,
 		contentSvc: contentSvc,
+		mediaSvc:   mediaSvc,
 		renderer:   renderer,
 		logger:     logger,
 		router:     r,

@@ -10,8 +10,8 @@ This document tracks progress, test verification, and milestones across all 10 d
 | **2** | **Authentication, Authorization & User Management** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
 | **3** | **Dynamic Content Type Builder & Content Engine** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
 | **4** | **Native HTML Template Engine & Theme System** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
-| **5** | Media Library & Storage Provider System | Up Next | - | - | - |
-| **6** | Plugin Architecture & SDK | Not Started | - | - | - |
+| **5** | **Media Library & Storage Provider System** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
+| **6** | Plugin Architecture & SDK | Up Next | - | - | - |
 | **7** | Admin Dashboard (React + TypeScript) | Not Started | - | - | - |
 | **8** | Advanced Capabilities (Localization, Search, Jobs, etc.) | Not Started | - | - | - |
 | **9** | Ecommerce Subsystem | Not Started | - | - | - |
@@ -74,3 +74,19 @@ This document tracks progress, test verification, and milestones across all 10 d
 - [x] Draft preview mode (`?preview=true`) guarded by authenticated read permissions
 - [x] Integrated with `cmd/server/main.go` and `internal/api/server.go`
 - [x] 100% test pass rate across theme manager and template renderer test suites
+
+---
+
+## Phase 5 Checklist (Media Library & Storage Provider System)
+- [x] Universal `StorageProvider` abstraction (`internal/storage/provider.go`)
+- [x] Local filesystem storage provider with path traversal defenses (`internal/storage/local/local.go`)
+- [x] S3-compatible cloud storage adapter (`internal/storage/s3/s3.go`)
+- [x] HMAC-SHA256 signed URL generator & validator with constant-time verification (`internal/storage/signed.go`)
+- [x] Web-safe filename sanitization (space-to-hyphen, lowercase, character allowlisting) (`internal/media/sanitization.go`)
+- [x] Collision-proof, date-partitioned storage key generation with UUIDs
+- [x] Image processing pipeline: MIME sniffing, dimensions inspection (PNG, JPEG, WebP), and bilinear downscaled thumbnail generation (`internal/media/processor.go`)
+- [x] Media database repository for SQL (`SQLRepository`) and in-memory (`MemoryRepository`)
+- [x] Comprehensive `media.Service` orchestrator managing upload lifecycle, metadata, thumbnails, signed URLs, and cleanup
+- [x] Media REST API handlers (`/api/v1/media` CRUD + `/signed-url`) and static file server (`/uploads/*`) with optional signed URL enforcement
+- [x] Integrated into HTTP server (`internal/api/server.go`) and application entry point (`cmd/server/main.go`)
+- [x] 100% test pass rate across local storage, signed URLs, sanitization, processor, media service, and media handler suites

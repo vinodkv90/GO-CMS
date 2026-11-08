@@ -110,3 +110,4 @@ func TestTheme_ResolveAssetPath_Security(t *testing.T) {
 	_, err = theme.ResolveAssetPath("/etc/passwd")
 	assert.Error(t, err)
 }
+

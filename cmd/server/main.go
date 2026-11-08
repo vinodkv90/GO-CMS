@@ -20,6 +20,8 @@ import (
 	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/database/migrations"
 	"github.com/go-cms/cms/internal/fields"
+	"github.com/go-cms/cms/internal/media"
+	"github.com/go-cms/cms/internal/storage/local"
 	"github.com/go-cms/cms/internal/templates"
 	"github.com/go-cms/cms/internal/themes"
 )
@@ -91,6 +93,17 @@ func main() {
 		contentSvc = content.NewService(contentRepo, contentRepo, contentRepo, fields.NewRegistry(), content.NewEventBus(), logger)
 	}
 
+	// Initialize Storage Provider and Media Service
+	var mediaSvc *media.Service
+	localStorage, errStorage := local.New(cfg.Media.UploadDir, "/uploads")
+	if errStorage != nil {
+		logger.Warn("Failed to initialize local storage provider", "error", errStorage)
+	} else if sqlDB, ok := db.(interfaces.SQLDatabase); ok {
+		mediaRepo := media.NewSQLRepository(sqlDB)
+		mediaSvc = media.NewService(mediaRepo, localStorage, cfg, logger)
+		logger.Info("Media library service initialized", "provider", localStorage.Name(), "upload_dir", cfg.Media.UploadDir)
+	}
+
 	// Initialize Themes Manager and Template Renderer
 	var renderer *templates.Renderer
 	themeMgr, errTheme := themes.NewManager(cfg.Themes.ThemesDir, cfg.Themes.ActiveTheme, logger)
@@ -102,7 +115,7 @@ func main() {
 	}
 
 	// 6. Initialize HTTP Server
-	server := api.NewServer(cfg, db, authSvc, contentSvc, renderer, logger)
+	server := api.NewServer(cfg, db, authSvc, contentSvc, mediaSvc, renderer, logger)
 
 	// 6. Graceful Shutdown Signal Handling
 	stopChan := make(chan os.Signal, 1)
