@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/database/interfaces"
 )
@@ -18,13 +19,14 @@ import (
 type Server struct {
 	cfg        *config.Config
 	db         interfaces.Database
+	authSvc    *auth.Service
 	logger     *slog.Logger
 	router     *chi.Mux
 	httpServer *http.Server
 }
 
 // NewServer configures and initializes a new HTTP Server.
-func NewServer(cfg *config.Config, db interfaces.Database, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service, logger *slog.Logger) *Server {
 	r := chi.NewRouter()
 
 	// 1. Basic Middlewares
@@ -51,13 +53,23 @@ func NewServer(cfg *config.Config, db interfaces.Database, logger *slog.Logger) 
 		MaxAge:           300,
 	}))
 
-	// 4. Mount Health, Info, and API routes
+	// 4. Auth Context Middleware
+	if authSvc != nil {
+		r.Use(auth.AuthMiddleware(authSvc))
+	}
+
+	// 5. Mount Health, Info, and API routes
 	r.Get("/healthz", HealthHandler)
 	r.Get("/readyz", ReadinessHandler(db))
 	r.Get("/info", InfoHandler(cfg, db))
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/ping", PingHandler)
+
+		if authSvc != nil {
+			authHandler := auth.NewHandler(authSvc)
+			authHandler.RegisterRoutes(api)
+		}
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -72,6 +84,7 @@ func NewServer(cfg *config.Config, db interfaces.Database, logger *slog.Logger) 
 	return &Server{
 		cfg:        cfg,
 		db:         db,
+		authSvc:    authSvc,
 		logger:     logger,
 		router:     r,
 		httpServer: httpSrv,
@@ -102,4 +115,3 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down CMS HTTP server...")
 	return s.httpServer.Shutdown(ctx)
 }
-

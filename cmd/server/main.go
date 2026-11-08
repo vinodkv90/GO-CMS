@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/go-cms/cms/internal/api"
+	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/core/logging"
 	"github.com/go-cms/cms/internal/database/factory"
+	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/database/migrations"
 )
 
@@ -69,8 +71,20 @@ func main() {
 		}
 	}
 
-	// 5. Initialize HTTP Server
-	server := api.NewServer(cfg, db, logger)
+	// 5. Initialize Auth Service & Seed Standard Roles/Admin
+	var authSvc *auth.Service
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok {
+		authRepo := auth.NewSQLAuthRepository(sqlDB)
+		authSvc = auth.NewService(authRepo, authRepo, authRepo, authRepo, cfg, logger)
+
+		// Seed initial roles and admin
+		if _, err := authSvc.SeedDefaultRolesAndAdmin(context.Background(), "admin", "admin@cms.local", "Admin@CMS2026!"); err != nil {
+			logger.Warn("Failed to seed default roles and admin", "error", err)
+		}
+	}
+
+	// 6. Initialize HTTP Server
+	server := api.NewServer(cfg, db, authSvc, logger)
 
 	// 6. Graceful Shutdown Signal Handling
 	stopChan := make(chan os.Signal, 1)
