@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="{{ defaultVal .Site.Language "en" }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ block "title" . }}{{ if .SEO.Title }}{{ .SEO.Title }} | {{ end }}{{ .Site.Title }}{{ end }}</title>
+  <meta name="description" content="{{ .SEO.Description }}">
+  {{ if .SEO.Canonical }}<link rel="canonical" href="{{ .SEO.Canonical }}">{{ end }}
+  {{ if .SEO.Robots }}<meta name="robots" content="{{ .SEO.Robots }}">{{ end }}
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="{{ defaultVal .SEO.OGType "website" }}">
+  <meta property="og:title" content="{{ defaultVal .SEO.Title .Site.Title }}">
+  <meta property="og:description" content="{{ .SEO.Description }}">
+  {{ if .SEO.Canonical }}<meta property="og:url" content="{{ .SEO.Canonical }}">{{ end }}
+  {{ if .SEO.OGImage }}<meta property="og:image" content="{{ .SEO.OGImage }}">{{ end }}
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="{{ assetPath "css/style.css" }}">
+  {{ block "extra_head" . }}{{ end }}
+</head>
+<body>
+  {{ if .Preview }}
+  <div class="preview-banner">
+    <div class="container">
+      <strong>&#9888; PREVIEW MODE</strong> &mdash; Viewing unpublished draft content.
+    </div>
+  </div>
+  {{ end }}
+
+  {{ template "header" . }}
+
+  <main class="site-main">
+    <div class="container">
+      {{ block "content" . }}
+      <p>No content available.</p>
+      {{ end }}
+    </div>
+  </main>
+
+  {{ template "footer" . }}
+
+  <script src="{{ assetPath "js/main.js" }}"></script>
+  {{ block "extra_scripts" . }}{{ end }}
+</body>
+</html>

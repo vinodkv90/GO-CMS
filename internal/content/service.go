@@ -19,6 +19,13 @@ var (
 )
 
 var validUIDRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var nonAlphaNumSlugRegex = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugify(s string) string {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	clean := nonAlphaNumSlugRegex.ReplaceAllString(lower, "-")
+	return strings.Trim(clean, "-")
+}
 
 // CreateTypeRequest holds input for creating a new content type.
 type CreateTypeRequest struct {
@@ -252,10 +259,12 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 		singletonKey = &key
 	}
 
-	// Extract optional slug if present
+	// Extract optional slug if present or derive from title
 	slug := ""
-	if sVal, ok := data["slug"].(string); ok {
+	if sVal, ok := data["slug"].(string); ok && sVal != "" {
 		slug = sVal
+	} else if tVal, ok := data["title"].(string); ok && tVal != "" {
+		slug = slugify(tVal)
 	}
 
 	entry := &ContentEntry{
@@ -323,8 +332,12 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 	existing.UpdatedBy = userID
 	existing.UpdatedAt = now
 
-	if sVal, ok := data["slug"].(string); ok {
+	if sVal, ok := data["slug"].(string); ok && sVal != "" {
 		existing.Slug = sVal
+	} else if existing.Slug == "" {
+		if tVal, ok := data["title"].(string); ok && tVal != "" {
+			existing.Slug = slugify(tVal)
+		}
 	}
 
 	// 1. Emit BeforeUpdate lifecycle hook
@@ -455,6 +468,27 @@ func (s *Service) GetEntry(ctx context.Context, typeUID, entryID string, preview
 	}
 
 	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !previewDraft {
+		if entry.Status != StatusPublished || entry.PublishedData == nil {
+			return nil, ErrNotPublished
+		}
+	}
+
+	return entry, nil
+}
+
+// GetEntryBySlug retrieves a single entry by its slug.
+func (s *Service) GetEntryBySlug(ctx context.Context, typeUID, slug string, previewDraft bool) (*ContentEntry, error) {
+	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	if err != nil {
+		return nil, err
+	}
+
+	entry, err := s.entryRepo.GetEntryBySlug(ctx, ct.ID, slug)
 	if err != nil {
 		return nil, err
 	}

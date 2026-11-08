@@ -14,6 +14,7 @@ import (
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
+	"github.com/go-cms/cms/internal/templates"
 )
 
 // Server wraps the HTTP router and http.Server instance.
@@ -22,13 +23,21 @@ type Server struct {
 	db         interfaces.Database
 	authSvc    *auth.Service
 	contentSvc *content.Service
+	renderer   *templates.Renderer
 	logger     *slog.Logger
 	router     *chi.Mux
 	httpServer *http.Server
 }
 
 // NewServer configures and initializes a new HTTP Server.
-func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service, contentSvc *content.Service, logger *slog.Logger) *Server {
+func NewServer(
+	cfg *config.Config,
+	db interfaces.Database,
+	authSvc *auth.Service,
+	contentSvc *content.Service,
+	renderer *templates.Renderer,
+	logger *slog.Logger,
+) *Server {
 	r := chi.NewRouter()
 
 	// 1. Basic Middlewares
@@ -79,6 +88,11 @@ func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service
 		}
 	})
 
+	// 6. Mount Traditional Web CMS Routes (Renderer)
+	if renderer != nil {
+		renderer.MountWebRoutes(r)
+	}
+
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpSrv := &http.Server{
 		Addr:         addr,
@@ -93,6 +107,7 @@ func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service
 		db:         db,
 		authSvc:    authSvc,
 		contentSvc: contentSvc,
+		renderer:   renderer,
 		logger:     logger,
 		router:     r,
 		httpServer: httpSrv,

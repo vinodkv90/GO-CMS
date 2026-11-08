@@ -1,0 +1,48 @@
+{{define "content"}}
+<article class="article-detail">
+  {{ if .Breadcrumbs }}
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <ol class="breadcrumb-list">
+      {{ range $index, $item := .Breadcrumbs }}
+      <li class="breadcrumb-item">
+        {{ if eq $index (sub (len $.Breadcrumbs) 1) }}
+        <span aria-current="page">{{ $item.Title }}</span>
+        {{ else }}
+        <a href="{{ $item.URL }}">{{ $item.Title }}</a> &rsaquo;
+        {{ end }}
+      </li>
+      {{ end }}
+    </ol>
+  </nav>
+  {{ end }}
+
+  <header class="article-header">
+    <h1 class="article-title">{{ defaultVal .Entry.title .Page.title }}</h1>
+    {{ if or .Entry.published_at .Page.published_at }}
+    <div class="article-meta">
+      <time datetime="{{ defaultVal .Entry.published_at .Page.published_at }}">
+        Published on {{ formatDate (defaultVal .Entry.published_at .Page.published_at) "January 02, 2006" }}
+      </time>
+    </div>
+    {{ end }}
+  </header>
+
+  <div class="article-body">
+    {{ if .Entry.content }}
+      {{ sanitizeHTML .Entry.content }}
+    {{ else if .Page.content }}
+      {{ sanitizeHTML .Page.content }}
+    {{ else if .Entry.body }}
+      {{ sanitizeHTML .Entry.body }}
+    {{ else if .Page.body }}
+      {{ sanitizeHTML .Page.body }}
+    {{ else }}
+      <p>No content has been published for this page yet.</p>
+    {{ end }}
+  </div>
+
+  <footer class="article-footer">
+    <a href="/" class="back-link">&larr; Back to Home</a>
+  </footer>
+</article>
+{{end}}

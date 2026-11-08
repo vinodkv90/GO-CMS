@@ -124,3 +124,4 @@ func TestRegistry(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, reg.IsValid("custom_color_picker"))
 }
+

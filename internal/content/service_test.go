@@ -174,3 +174,4 @@ func TestService_SingleTypeSingletonEnforcement(t *testing.T) {
 	}, "user-1")
 	assert.ErrorIs(t, err, ErrSingletonExists)
 }
+

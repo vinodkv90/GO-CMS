@@ -1,0 +1,39 @@
+{{define "content"}}
+<div class="home-page">
+  <section class="hero">
+    <div class="hero-content">
+      <h1 class="hero-title">{{ defaultVal .Page.title .Site.Title }}</h1>
+      <p class="hero-tagline">{{ defaultVal .Page.description .Site.Tagline }}</p>
+    </div>
+  </section>
+
+  {{ if .Posts }}
+  <section class="latest-posts">
+    <h2 class="section-title">Latest Articles</h2>
+    <div class="posts-grid">
+      {{ range .Posts }}
+      <article class="post-card">
+        <h3 class="post-title">
+          <a href="/{{ ._type }}/{{ ._slug }}">{{ .title }}</a>
+        </h3>
+        {{ if .published_at }}
+        <time class="post-date" datetime="{{ .published_at }}">{{ formatDate .published_at "Jan 02, 2006" }}</time>
+        {{ end }}
+        {{ if .excerpt }}
+        <p class="post-excerpt">{{ truncate .excerpt 160 }}</p>
+        {{ end }}
+        <a href="/{{ ._type }}/{{ ._slug }}" class="post-link">Read article &rarr;</a>
+      </article>
+      {{ end }}
+    </div>
+  </section>
+  {{ else }}
+  <section class="welcome-section">
+    <div class="welcome-box">
+      <h2>Welcome to your Go CMS website!</h2>
+      <p>Log into the admin portal to define content types and publish your first articles.</p>
+    </div>
+  </section>
+  {{ end }}
+</div>
+{{end}}

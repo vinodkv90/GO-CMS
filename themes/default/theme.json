@@ -1,0 +1,14 @@
+{
+  "name": "Default Theme",
+  "slug": "default",
+  "version": "1.0.0",
+  "description": "Standard native Go HTML template theme for Go CMS",
+  "author": "Go CMS Team",
+  "engine": "go-html-template",
+  "minimumCmsVersion": "1.0.0",
+  "settings": {
+    "accentColor": "#0284c7",
+    "showAuthor": true,
+    "postsPerPage": 10
+  }
+}

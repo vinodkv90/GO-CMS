@@ -1,0 +1,61 @@
+{{define "content"}}
+<div class="archive-page">
+  {{ if .Breadcrumbs }}
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <ol class="breadcrumb-list">
+      {{ range $index, $item := .Breadcrumbs }}
+      <li class="breadcrumb-item">
+        {{ if eq $index (sub (len $.Breadcrumbs) 1) }}
+        <span aria-current="page">{{ $item.Title }}</span>
+        {{ else }}
+        <a href="{{ $item.URL }}">{{ $item.Title }}</a> &rsaquo;
+        {{ end }}
+      </li>
+      {{ end }}
+    </ol>
+  </nav>
+  {{ end }}
+
+  <header class="archive-header">
+    <h1 class="archive-title">{{ .SEO.Title }}</h1>
+    {{ if .SEO.Description }}
+    <p class="archive-description">{{ .SEO.Description }}</p>
+    {{ end }}
+  </header>
+
+  {{ if .Posts }}
+  <div class="posts-grid">
+    {{ range .Posts }}
+    <article class="post-card">
+      <h2 class="post-title">
+        <a href="/{{ ._type }}/{{ ._slug }}">{{ .title }}</a>
+      </h2>
+      {{ if .published_at }}
+      <time class="post-date" datetime="{{ .published_at }}">{{ formatDate .published_at "Jan 02, 2006" }}</time>
+      {{ end }}
+      {{ if .excerpt }}
+      <p class="post-excerpt">{{ truncate .excerpt 160 }}</p>
+      {{ end }}
+      <a href="/{{ ._type }}/{{ ._slug }}" class="post-link">Read article &rarr;</a>
+    </article>
+    {{ end }}
+  </div>
+
+  {{ if .Pagination }}
+  <nav class="pagination" aria-label="Pagination Navigation">
+    {{ if .Pagination.HasPrev }}
+    <a href="{{ .Pagination.PrevURL }}" class="pagination-link prev">&larr; Previous</a>
+    {{ end }}
+    <span class="pagination-status">Page {{ .Pagination.CurrentPage }} of {{ .Pagination.TotalPages }}</span>
+    {{ if .Pagination.HasNext }}
+    <a href="{{ .Pagination.NextURL }}" class="pagination-link next">Next &rarr;</a>
+    {{ end }}
+  </nav>
+  {{ end }}
+  {{ else }}
+  <div class="empty-state">
+    <p>No entries found in this collection.</p>
+  </div>
+  {{ end }}
+</div>
+{{end}}

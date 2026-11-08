@@ -1,0 +1,13 @@
+{{define "header"}}
+<header class="site-header">
+  <div class="container header-container">
+    <div class="site-branding">
+      <a href="/" class="site-title">{{ .Site.Title }}</a>
+      {{ if .Site.Tagline }}
+        <p class="site-tagline">{{ .Site.Tagline }}</p>
+      {{ end }}
+    </div>
+    {{ template "navigation" . }}
+  </div>
+</header>
+{{end}}

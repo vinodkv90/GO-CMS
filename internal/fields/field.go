@@ -267,3 +267,4 @@ func (r *Registry) Register(ft FieldType) error {
 func (r *Registry) IsValid(ft FieldType) bool {
 	return r.types[ft]
 }
+

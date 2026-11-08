@@ -20,6 +20,8 @@ import (
 	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/database/migrations"
 	"github.com/go-cms/cms/internal/fields"
+	"github.com/go-cms/cms/internal/templates"
+	"github.com/go-cms/cms/internal/themes"
 )
 
 func main() {
@@ -89,8 +91,18 @@ func main() {
 		contentSvc = content.NewService(contentRepo, contentRepo, contentRepo, fields.NewRegistry(), content.NewEventBus(), logger)
 	}
 
+	// Initialize Themes Manager and Template Renderer
+	var renderer *templates.Renderer
+	themeMgr, errTheme := themes.NewManager(cfg.Themes.ThemesDir, cfg.Themes.ActiveTheme, logger)
+	if errTheme != nil {
+		logger.Warn("Failed to initialize theme manager", "error", errTheme)
+	} else {
+		renderer = templates.NewRenderer(cfg, themeMgr, contentSvc, logger)
+		logger.Info("Theme manager and template renderer initialized", "active_theme", cfg.Themes.ActiveTheme)
+	}
+
 	// 6. Initialize HTTP Server
-	server := api.NewServer(cfg, db, authSvc, contentSvc, logger)
+	server := api.NewServer(cfg, db, authSvc, contentSvc, renderer, logger)
 
 	// 6. Graceful Shutdown Signal Handling
 	stopChan := make(chan os.Signal, 1)

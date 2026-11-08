@@ -126,7 +126,7 @@ func TestSecurityHeadersAndCORS(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	db := &mockHealthDB{driver: "postgres"}
 
-	srv := NewServer(cfg, db, nil, nil, logger)
+	srv := NewServer(cfg, db, nil, nil, nil, logger)
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -149,7 +149,7 @@ func TestApiV1Ping(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	db := &mockHealthDB{driver: "postgres"}
 
-	srv := NewServer(cfg, db, nil, nil, logger)
+	srv := NewServer(cfg, db, nil, nil, nil, logger)
 
 	req := httptest.NewRequest("GET", "/api/v1/ping", nil)
 	w := httptest.NewRecorder()
