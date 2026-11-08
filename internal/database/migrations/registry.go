@@ -13,11 +13,11 @@ func DefaultMigrations(driver string) []Migration {
 	var migrations []Migration
 
 	if driver == "postgres" {
-		migrations = append(migrations, postgresCoreMigration())
+		migrations = append(migrations, postgresCoreMigration(), postgresContentEngineMigration())
 	} else if driver == "mysql" {
-		migrations = append(migrations, mysqlCoreMigration())
+		migrations = append(migrations, mysqlCoreMigration(), mysqlContentEngineMigration())
 	} else if driver == "mongodb" {
-		migrations = append(migrations, mongoCoreMigration())
+		migrations = append(migrations, mongoCoreMigration(), mongoContentEngineMigration())
 	}
 
 	return migrations
@@ -265,6 +265,185 @@ func mongoCoreMigration() Migration {
 				},
 				"cms_settings": {
 					{Keys: bson.D{{Key: "key", Value: 1}}, Options: options.Index().SetUnique(true)},
+				},
+			}
+
+			for colName, indexModels := range collections {
+				col := db.Collection(colName)
+				for _, idx := range indexModels {
+					if _, err := col.Indexes().CreateOne(ctx, idx); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func postgresContentEngineMigration() Migration {
+	upSQL := `
+	CREATE TABLE IF NOT EXISTS content_types (
+		id VARCHAR(36) PRIMARY KEY,
+		uid VARCHAR(100) UNIQUE NOT NULL,
+		name VARCHAR(100) NOT NULL,
+		kind VARCHAR(50) NOT NULL,
+		settings JSONB NOT NULL DEFAULT '{}',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS content_fields (
+		id VARCHAR(36) PRIMARY KEY,
+		content_type_id VARCHAR(36) REFERENCES content_types(id) ON DELETE CASCADE,
+		name VARCHAR(100) NOT NULL,
+		field_key VARCHAR(100) NOT NULL,
+		field_type VARCHAR(50) NOT NULL,
+		configuration JSONB NOT NULL DEFAULT '{}',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		CONSTRAINT uq_ct_field_key UNIQUE(content_type_id, field_key)
+	);
+
+	CREATE TABLE IF NOT EXISTS content_entries (
+		id VARCHAR(36) PRIMARY KEY,
+		content_type_id VARCHAR(36) REFERENCES content_types(id) ON DELETE CASCADE,
+		slug VARCHAR(255),
+		draft_data JSONB NOT NULL DEFAULT '{}',
+		published_data JSONB,
+		status VARCHAR(50) NOT NULL DEFAULT 'draft',
+		draft_version INT NOT NULL DEFAULT 1,
+		published_version INT DEFAULT 0,
+		singleton_key VARCHAR(36) UNIQUE,
+		created_by VARCHAR(36),
+		updated_by VARCHAR(36),
+		published_at TIMESTAMP WITH TIME ZONE,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		deleted_at TIMESTAMP WITH TIME ZONE
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_entries_ct_status ON content_entries(content_type_id, status);
+	CREATE INDEX IF NOT EXISTS idx_entries_slug ON content_entries(content_type_id, slug);
+
+	CREATE TABLE IF NOT EXISTS content_versions (
+		id VARCHAR(36) PRIMARY KEY,
+		entry_id VARCHAR(36) REFERENCES content_entries(id) ON DELETE CASCADE,
+		version_number INT NOT NULL,
+		snapshot JSONB NOT NULL,
+		action VARCHAR(50) NOT NULL,
+		changed_by VARCHAR(36),
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_versions_entry ON content_versions(entry_id, version_number DESC);
+
+	CREATE TABLE IF NOT EXISTS content_relations (
+		id VARCHAR(36) PRIMARY KEY,
+		source_entry_id VARCHAR(36) REFERENCES content_entries(id) ON DELETE CASCADE,
+		target_entry_id VARCHAR(36) REFERENCES content_entries(id) ON DELETE CASCADE,
+		relation_key VARCHAR(100) NOT NULL
+	);
+	`
+
+	return Migration{
+		Version: "202611080002",
+		Name:    "content_engine_schema",
+		UpSQL:   upSQL,
+	}
+}
+
+func mysqlContentEngineMigration() Migration {
+	upSQL := `
+	CREATE TABLE IF NOT EXISTS content_types (
+		id VARCHAR(36) PRIMARY KEY,
+		uid VARCHAR(100) UNIQUE NOT NULL,
+		name VARCHAR(100) NOT NULL,
+		kind VARCHAR(50) NOT NULL,
+		settings JSON NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+	CREATE TABLE IF NOT EXISTS content_fields (
+		id VARCHAR(36) PRIMARY KEY,
+		content_type_id VARCHAR(36) NOT NULL,
+		name VARCHAR(100) NOT NULL,
+		field_key VARCHAR(100) NOT NULL,
+		field_type VARCHAR(50) NOT NULL,
+		configuration JSON NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE KEY uq_ct_field_key (content_type_id, field_key),
+		CONSTRAINT fk_cf_ct FOREIGN KEY (content_type_id) REFERENCES content_types(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+	CREATE TABLE IF NOT EXISTS content_entries (
+		id VARCHAR(36) PRIMARY KEY,
+		content_type_id VARCHAR(36) NOT NULL,
+		slug VARCHAR(255),
+		draft_data JSON NOT NULL,
+		published_data JSON,
+		status VARCHAR(50) NOT NULL DEFAULT 'draft',
+		draft_version INT NOT NULL DEFAULT 1,
+		published_version INT DEFAULT 0,
+		singleton_key VARCHAR(36) UNIQUE,
+		created_by VARCHAR(36),
+		updated_by VARCHAR(36),
+		published_at TIMESTAMP NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		deleted_at TIMESTAMP NULL,
+		KEY idx_entries_ct_status (content_type_id, status),
+		KEY idx_entries_slug (content_type_id, slug),
+		CONSTRAINT fk_ce_ct FOREIGN KEY (content_type_id) REFERENCES content_types(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+	CREATE TABLE IF NOT EXISTS content_versions (
+		id VARCHAR(36) PRIMARY KEY,
+		entry_id VARCHAR(36) NOT NULL,
+		version_number INT NOT NULL,
+		snapshot JSON NOT NULL,
+		action VARCHAR(50) NOT NULL,
+		changed_by VARCHAR(36),
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY idx_versions_entry (entry_id, version_number),
+		CONSTRAINT fk_cv_entry FOREIGN KEY (entry_id) REFERENCES content_entries(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+	CREATE TABLE IF NOT EXISTS content_relations (
+		id VARCHAR(36) PRIMARY KEY,
+		source_entry_id VARCHAR(36) NOT NULL,
+		target_entry_id VARCHAR(36) NOT NULL,
+		relation_key VARCHAR(100) NOT NULL,
+		CONSTRAINT fk_cr_src FOREIGN KEY (source_entry_id) REFERENCES content_entries(id) ON DELETE CASCADE,
+		CONSTRAINT fk_cr_tgt FOREIGN KEY (target_entry_id) REFERENCES content_entries(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+	`
+
+	return Migration{
+		Version: "202611080002",
+		Name:    "content_engine_schema",
+		UpSQL:   upSQL,
+	}
+}
+
+func mongoContentEngineMigration() Migration {
+	return Migration{
+		Version: "202611080002",
+		Name:    "content_engine_schema",
+		UpMongo: func(ctx context.Context, db *mongo.Database) error {
+			collections := map[string][]mongo.IndexModel{
+				"content_types": {
+					{Keys: bson.D{{Key: "uid", Value: 1}}, Options: options.Index().SetUnique(true)},
+				},
+				"content_fields": {
+					{Keys: bson.D{{Key: "content_type_id", Value: 1}, {Key: "field_key", Value: 1}}, Options: options.Index().SetUnique(true)},
+				},
+				"content_entries": {
+					{Keys: bson.D{{Key: "content_type_id", Value: 1}, {Key: "status", Value: 1}}},
+					{Keys: bson.D{{Key: "singleton_key", Value: 1}}, Options: options.Index().SetUnique(true).SetSparse(true)},
+				},
+				"content_versions": {
+					{Keys: bson.D{{Key: "entry_id", Value: 1}, {Key: "version_number", Value: -1}}},
 				},
 			}
 

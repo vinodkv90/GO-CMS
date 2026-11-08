@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
+	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
 )
 
@@ -20,13 +21,14 @@ type Server struct {
 	cfg        *config.Config
 	db         interfaces.Database
 	authSvc    *auth.Service
+	contentSvc *content.Service
 	logger     *slog.Logger
 	router     *chi.Mux
 	httpServer *http.Server
 }
 
 // NewServer configures and initializes a new HTTP Server.
-func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service, contentSvc *content.Service, logger *slog.Logger) *Server {
 	r := chi.NewRouter()
 
 	// 1. Basic Middlewares
@@ -70,6 +72,11 @@ func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service
 			authHandler := auth.NewHandler(authSvc)
 			authHandler.RegisterRoutes(api)
 		}
+
+		if contentSvc != nil {
+			contentHandler := content.NewHandler(contentSvc)
+			contentHandler.RegisterRoutes(api)
+		}
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -85,6 +92,7 @@ func NewServer(cfg *config.Config, db interfaces.Database, authSvc *auth.Service
 		cfg:        cfg,
 		db:         db,
 		authSvc:    authSvc,
+		contentSvc: contentSvc,
 		logger:     logger,
 		router:     r,
 		httpServer: httpSrv,

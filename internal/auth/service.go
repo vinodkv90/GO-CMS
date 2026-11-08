@@ -56,6 +56,9 @@ func NewService(
 	cfg *config.Config,
 	logger *slog.Logger,
 ) *Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Service{
 		userRepo:  userRepo,
 		roleRepo:  roleRepo,
