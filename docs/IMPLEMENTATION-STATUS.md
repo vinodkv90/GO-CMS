@@ -11,8 +11,8 @@ This document tracks progress, test verification, and milestones across all 10 d
 | **3** | **Dynamic Content Type Builder & Content Engine** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
 | **4** | **Native HTML Template Engine & Theme System** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
 | **5** | **Media Library & Storage Provider System** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
-| **6** | Plugin Architecture & SDK | Up Next | - | - | - |
-| **7** | Admin Dashboard (React + TypeScript) | Not Started | - | - | - |
+| **6** | **Plugin Architecture & SDK** | **Completed** | **Passed (100%)** | **Passed** | **Verified** |
+| **7** | Admin Dashboard (React + TypeScript) | Up Next | - | - | - |
 | **8** | Advanced Capabilities (Localization, Search, Jobs, etc.) | Not Started | - | - | - |
 | **9** | Ecommerce Subsystem | Not Started | - | - | - |
 | **10**| Production Hardening & Security Audit | Not Started | - | - | - |
@@ -90,3 +90,17 @@ This document tracks progress, test verification, and milestones across all 10 d
 - [x] Media REST API handlers (`/api/v1/media` CRUD + `/signed-url`) and static file server (`/uploads/*`) with optional signed URL enforcement
 - [x] Integrated into HTTP server (`internal/api/server.go`) and application entry point (`cmd/server/main.go`)
 - [x] 100% test pass rate across local storage, signed URLs, sanitization, processor, media service, and media handler suites
+
+---
+
+## Phase 6 Checklist (Plugin Architecture & SDK)
+- [x] Public Plugin SDK specification & contracts (`pkg/plugin-sdk/`)
+- [x] Plugin manifest format (`plugin.json`), capabilities, and permission validation (`pkg/plugin-sdk/manifest.go`)
+- [x] Core Host bridge adapter linking to lifecycle hooks, field registry, subrouter, and audit logging (`internal/plugins/host_adapter.go`)
+- [x] Plugin lifecycle manager with thread-safe discovery, installation, runtime activation, and configuration (`internal/plugins/manager.go`)
+- [x] Dynamic subrouter request dispatcher ensuring instant deactivation of routes upon plugin disablement
+- [x] Reference Plugin 1: Audit Log Plugin (`plugins/audit-log/`) recording content lifecycle mutations to `cms_audit_logs`
+- [x] Reference Plugin 2: SEO Analyzer Plugin (`plugins/seo-analyzer/`) providing content scoring and recommendations
+- [x] Administrative REST API endpoints (`/api/v1/plugins`) for listing, inspecting, enabling, disabling, and configuring plugins (`internal/plugins/handler.go`)
+- [x] Integrated with HTTP router (`internal/api/server.go`) and server bootstrapping (`cmd/server/main.go`)
+- [x] 100% test pass rate across plugin SDK, manager, handler, and reference plugin test suites

@@ -15,6 +15,7 @@ import (
 	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/media"
+	"github.com/go-cms/cms/internal/plugins"
 	"github.com/go-cms/cms/internal/templates"
 )
 
@@ -25,6 +26,7 @@ type Server struct {
 	authSvc    *auth.Service
 	contentSvc *content.Service
 	mediaSvc   *media.Service
+	pluginMgr  *plugins.Manager
 	renderer   *templates.Renderer
 	logger     *slog.Logger
 	router     *chi.Mux
@@ -38,6 +40,7 @@ func NewServer(
 	authSvc *auth.Service,
 	contentSvc *content.Service,
 	mediaSvc *media.Service,
+	pluginMgr *plugins.Manager,
 	renderer *templates.Renderer,
 	logger *slog.Logger,
 ) *Server {
@@ -94,6 +97,11 @@ func NewServer(
 			mediaHandler := media.NewHandler(mediaSvc, cfg)
 			mediaHandler.RegisterRoutes(api)
 		}
+
+		if pluginMgr != nil {
+			pluginHandler := plugins.NewHandler(pluginMgr)
+			pluginHandler.RegisterRoutes(api)
+		}
 	})
 
 	// 6. Mount Static Uploaded Files
@@ -122,6 +130,7 @@ func NewServer(
 		authSvc:    authSvc,
 		contentSvc: contentSvc,
 		mediaSvc:   mediaSvc,
+		pluginMgr:  pluginMgr,
 		renderer:   renderer,
 		logger:     logger,
 		router:     r,

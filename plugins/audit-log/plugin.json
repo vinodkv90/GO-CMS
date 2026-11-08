@@ -1,0 +1,22 @@
+{
+  "id": "audit-log",
+  "name": "Audit Log Plugin",
+  "version": "1.0.0",
+  "description": "Enterprise tamper-evident audit logging for content mutations and security events",
+  "author": "Go CMS Core Team",
+  "minimumCmsVersion": "1.0.0",
+  "runtime": "go-native",
+  "permissions": [
+    "hook:content:afterCreate",
+    "hook:content:afterUpdate",
+    "hook:content:afterDelete",
+    "hook:content:afterPublish",
+    "audit:write"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/stats"
+    }
+  ]
+}

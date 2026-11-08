@@ -21,9 +21,12 @@ import (
 	"github.com/go-cms/cms/internal/database/migrations"
 	"github.com/go-cms/cms/internal/fields"
 	"github.com/go-cms/cms/internal/media"
+	"github.com/go-cms/cms/internal/plugins"
 	"github.com/go-cms/cms/internal/storage/local"
 	"github.com/go-cms/cms/internal/templates"
 	"github.com/go-cms/cms/internal/themes"
+	auditlog "github.com/go-cms/cms/plugins/audit-log"
+	seoanalyzer "github.com/go-cms/cms/plugins/seo-analyzer"
 )
 
 func main() {
@@ -114,8 +117,28 @@ func main() {
 		logger.Info("Theme manager and template renderer initialized", "active_theme", cfg.Themes.ActiveTheme)
 	}
 
+	// Initialize Plugin Manager and Register Reference Plugins
+	var eventBus *content.EventBus
+	var fieldReg *fields.Registry
+	if contentSvc != nil {
+		eventBus = contentSvc.EventBus()
+	}
+	fieldReg = fields.NewRegistry()
+
+	pluginMgr := plugins.NewManager(cfg.Plugins.PluginsDir, eventBus, fieldReg, db, logger)
+	if err := pluginMgr.Scan(); err != nil {
+		logger.Warn("Failed to scan plugins directory", "error", err)
+	}
+
+	// Register built-in reference plugins
+	_ = pluginMgr.RegisterNative(auditlog.New())
+	_ = pluginMgr.RegisterNative(seoanalyzer.New())
+	_ = pluginMgr.Enable(context.Background(), "audit-log")
+	_ = pluginMgr.Enable(context.Background(), "seo-analyzer")
+	logger.Info("Plugin architecture initialized and reference plugins enabled")
+
 	// 6. Initialize HTTP Server
-	server := api.NewServer(cfg, db, authSvc, contentSvc, mediaSvc, renderer, logger)
+	server := api.NewServer(cfg, db, authSvc, contentSvc, mediaSvc, pluginMgr, renderer, logger)
 
 	// 6. Graceful Shutdown Signal Handling
 	stopChan := make(chan os.Signal, 1)

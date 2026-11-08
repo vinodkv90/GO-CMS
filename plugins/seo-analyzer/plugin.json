@@ -1,0 +1,18 @@
+{
+  "id": "seo-analyzer",
+  "name": "SEO Analyzer Plugin",
+  "version": "1.0.0",
+  "description": "Analyzes content title and body for SEO best practices and keyword density",
+  "author": "Go CMS Core Team",
+  "minimumCmsVersion": "1.0.0",
+  "runtime": "go-native",
+  "permissions": [
+    "routes:mount"
+  ],
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/analyze"
+    }
+  ]
+}
