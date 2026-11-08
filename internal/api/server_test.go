@@ -165,3 +165,47 @@ func TestApiV1Ping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pong", body["message"])
 }
+
+func TestAdminSPARoutes(t *testing.T) {
+	if findAdminDist() == "" {
+		t.Skip("skipping admin SPA test: admin/dist is not built")
+	}
+
+	cfg := config.DefaultConfig()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	db := &mockHealthDB{driver: "postgres"}
+
+	srv := NewServer(cfg, db, nil, nil, nil, nil, nil, logger)
+
+	// Test 1: /admin redirects to /admin/
+	req1 := httptest.NewRequest("GET", "/admin", nil)
+	w1 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w1, req1)
+	resp1 := w1.Result()
+	defer resp1.Body.Close()
+	assert.Equal(t, http.StatusMovedPermanently, resp1.StatusCode)
+	assert.Equal(t, "/admin/", resp1.Header.Get("Location"))
+
+	// Test 2: /admin/ serves index.html
+	req2 := httptest.NewRequest("GET", "/admin/", nil)
+	w2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w2, req2)
+	resp2 := w2.Result()
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+	bodyBytes, err := io.ReadAll(resp2.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(bodyBytes), "Go CMS - Admin Console")
+
+	// Test 3: Client-side routing fallback /admin/content-types serves index.html
+	req3 := httptest.NewRequest("GET", "/admin/content-types", nil)
+	w3 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w3, req3)
+	resp3 := w3.Result()
+	defer resp3.Body.Close()
+	assert.Equal(t, http.StatusOK, resp3.StatusCode)
+	bodyBytes3, err := io.ReadAll(resp3.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(bodyBytes3), "Go CMS - Admin Console")
+}
+

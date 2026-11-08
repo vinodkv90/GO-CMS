@@ -75,3 +75,4 @@ func TestAuditLogPlugin_EventCaptureAndStats(t *testing.T) {
 
 	require.NoError(t, plugin.Stop(ctx))
 }
+

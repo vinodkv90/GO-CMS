@@ -68,3 +68,4 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	}
 	return &m, nil
 }
+

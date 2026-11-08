@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -110,7 +113,10 @@ func NewServer(
 		mediaHandler.MountFileServer(r)
 	}
 
-	// 7. Mount Traditional Web CMS Routes (Renderer)
+	// 7. Mount Admin SPA Console (if built)
+	mountAdminSPA(r)
+
+	// 8. Mount Traditional Web CMS Routes (Renderer)
 	if renderer != nil {
 		renderer.MountWebRoutes(r)
 	}
@@ -162,3 +168,51 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down CMS HTTP server...")
 	return s.httpServer.Shutdown(ctx)
 }
+
+// findAdminDist locates the compiled React Admin SPA directory.
+func findAdminDist() string {
+	candidates := []string{
+		filepath.Join("admin", "dist"),
+		filepath.Join("..", "admin", "dist"),
+		filepath.Join("..", "..", "admin", "dist"),
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
+
+// mountAdminSPA mounts the static built React Admin SPA if admin/dist exists.
+func mountAdminSPA(r chi.Router) {
+	distPath := findAdminDist()
+	if distPath == "" {
+		return
+	}
+
+	fs := http.StripPrefix("/admin", http.FileServer(http.Dir(distPath)))
+
+	r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+	})
+
+	r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+		subpath := chi.URLParam(req, "*")
+		if subpath == "" || subpath == "/" {
+			http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
+			return
+		}
+
+		cleanPath := strings.TrimPrefix(filepath.Clean(subpath), string(filepath.Separator))
+		targetFile := filepath.Join(distPath, cleanPath)
+		if info, err := os.Stat(targetFile); err == nil && !info.IsDir() {
+			fs.ServeHTTP(w, req)
+			return
+		}
+
+		// Client-side SPA routing fallback
+		http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
+	})
+}
+

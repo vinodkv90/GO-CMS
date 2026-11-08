@@ -111,3 +111,4 @@ func TestPluginHandler_FullLifecycleAPI(t *testing.T) {
 	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+

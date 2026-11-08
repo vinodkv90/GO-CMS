@@ -39,3 +39,4 @@ func (b *BasePlugin) Start(ctx context.Context) error {
 func (b *BasePlugin) Stop(ctx context.Context) error {
 	return nil
 }
+

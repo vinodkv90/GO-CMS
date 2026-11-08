@@ -83,3 +83,4 @@ func TestSEOAnalyzerPlugin_AnalyzeEndpoint(t *testing.T) {
 
 	require.NoError(t, plugin.Stop(ctx))
 }
+
