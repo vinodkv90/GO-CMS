@@ -6,16 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/go-cms/cms/internal/storage"
 )
 
 const (
 	// MaxHLSZipSizeBytes limits the raw zip package size (1 GB).
 	MaxHLSZipSizeBytes int64 = 1 << 30
+	// MaxHLSRequestBodyBytes allows multipart overhead in addition to the ZIP payload.
+	MaxHLSRequestBodyBytes int64 = MaxHLSZipSizeBytes + 1<<20
 
 	// MaxHLSExtractedSizeBytes limits total uncompressed package size to prevent zip-bombing (2 GB).
 	MaxHLSExtractedSizeBytes int64 = 2 << 30
@@ -350,10 +356,45 @@ func parseMasterPlaylistVariants(content string, baseDir string) []HLSVariantInf
 // RewriteHLSPlaylistWithSignedParams rewrites relative URIs in an .m3u8 playlist to append
 // the signed query parameters (token, expires, signature) so HLS players can fetch child segments without 403.
 func RewriteHLSPlaylistWithSignedParams(content []byte, rawQuery string) []byte {
-	if rawQuery == "" {
+	return rewriteHLSPlaylist(content, func(uri string) string {
+		return appendHLSQuery(uri, rawQuery)
+	})
+}
+
+// RewriteHLSPlaylistWithPathSignedParams signs every relative child URI for its
+// resolved storage path. Child requests cannot reuse the parent signature
+// because signed URLs are bound to their exact path.
+func RewriteHLSPlaylistWithPathSignedParams(content []byte, playlistPath string, expiresAt time.Time, signer *storage.URLSigner, tenantID string) []byte {
+	if signer == nil || playlistPath == "" {
 		return content
 	}
 
+	baseURL, err := url.Parse(playlistPath)
+	if err != nil {
+		return content
+	}
+
+	return rewriteHLSPlaylist(content, func(uri string) string {
+		childURL, err := url.Parse(uri)
+		if err != nil || childURL.IsAbs() || childURL.Host != "" {
+			return uri
+		}
+
+		resolved := baseURL.ResolveReference(childURL)
+		signed, err := signer.SignWithTenantExpiration(resolved.Path+querySuffix(resolved), expiresAt, tenantID)
+		if err != nil {
+			return uri
+		}
+		signedURL, err := url.Parse(signed)
+		if err != nil {
+			return uri
+		}
+		childURL.RawQuery = signedURL.RawQuery
+		return childURL.String()
+	})
+}
+
+func rewriteHLSPlaylist(content []byte, rewriteURI func(string) string) []byte {
 	var sb bytes.Buffer
 	lines := strings.Split(string(content), "\n")
 
@@ -371,11 +412,7 @@ func RewriteHLSPlaylistWithSignedParams(content []byte, rawQuery string) []byte 
 				rewritten := re.ReplaceAllStringFunc(trimmed, func(m string) string {
 					sub := re.FindStringSubmatch(m)
 					if len(sub) > 1 && !strings.HasPrefix(sub[1], "http://") && !strings.HasPrefix(sub[1], "https://") {
-						sep := "?"
-						if strings.Contains(sub[1], "?") {
-							sep = "&"
-						}
-						return fmt.Sprintf(`URI="%s%s%s"`, sub[1], sep, rawQuery)
+						return fmt.Sprintf(`URI="%s"`, rewriteURI(sub[1]))
 					}
 					return m
 				})
@@ -391,11 +428,7 @@ func RewriteHLSPlaylistWithSignedParams(content []byte, rawQuery string) []byte 
 
 		// Relative URI line (segment or variant playlist)
 		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
-			sep := "?"
-			if strings.Contains(trimmed, "?") {
-				sep = "&"
-			}
-			sb.WriteString(trimmed + sep + rawQuery + "\n")
+			sb.WriteString(rewriteURI(trimmed) + "\n")
 		} else {
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -403,4 +436,37 @@ func RewriteHLSPlaylistWithSignedParams(content []byte, rawQuery string) []byte 
 	}
 
 	return sb.Bytes()
+}
+
+func appendHLSQuery(uri, rawQuery string) string {
+	if rawQuery == "" {
+		return uri
+	}
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return uri
+	}
+	query := parsed.Query()
+	for key, values := range parseRawQuery(rawQuery) {
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func parseRawQuery(rawQuery string) url.Values {
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return url.Values{}
+	}
+	return query
+}
+
+func querySuffix(u *url.URL) string {
+	if u.RawQuery == "" {
+		return ""
+	}
+	return "?" + u.RawQuery
 }

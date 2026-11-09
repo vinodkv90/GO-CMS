@@ -110,6 +110,31 @@ func MaxBodySizeMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
+// MaxBodySizeMiddlewareByPath applies a request body limit selected from the request path.
+// This allows large streaming uploads without increasing limits for unrelated endpoints.
+func MaxBodySizeMiddlewareByPath(defaultMaxBytes int64, pathLimit func(string) int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			maxBytes := defaultMaxBytes
+			if pathLimit != nil {
+				if selected := pathLimit(r.URL.Path); selected > 0 {
+					maxBytes = selected
+				}
+			}
+			if r.ContentLength > maxBytes {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "request body entity too large",
+				})
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // StructuredLoggerMiddleware logs every HTTP request using slog with context attributes.
 func StructuredLoggerMiddleware(logger *slog.Logger) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

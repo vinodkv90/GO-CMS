@@ -9,12 +9,15 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/media"
+	"github.com/go-cms/cms/internal/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -271,11 +274,27 @@ http://cdn.external.com/segment1.ts
 	rewritten := media.RewriteHLSPlaylistWithSignedParams(rawPlaylist, rawQuery)
 	result := string(rewritten)
 
-	assert.Contains(t, result, "720p/index.m3u8?signature=abc123sig&expires=1794200000&tenant=default")
-	assert.Contains(t, result, `URI="crypt.key?signature=abc123sig&expires=1794200000&tenant=default"`)
-	assert.Contains(t, result, "segment0.ts?signature=abc123sig&expires=1794200000&tenant=default")
+	assert.Contains(t, result, "720p/index.m3u8?expires=1794200000&signature=abc123sig&tenant=default")
+	assert.Contains(t, result, `URI="crypt.key?expires=1794200000&signature=abc123sig&tenant=default"`)
+	assert.Contains(t, result, "segment0.ts?expires=1794200000&signature=abc123sig&tenant=default")
 	// External URL is untouched
 	assert.Contains(t, result, "http://cdn.external.com/segment1.ts\n")
+}
+
+func TestHLS_SignedURLPlaylistRewritingSignsChildPaths(t *testing.T) {
+	signer := storage.NewURLSigner("hls-test-secret", time.Hour)
+	expiresAt := time.Now().Add(time.Hour)
+	playlist := []byte("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1280000\n720p/index.m3u8\n#EXTINF:10.0,\nsegment0.ts\n")
+
+	rewritten := media.RewriteHLSPlaylistWithPathSignedParams(playlist, "/uploads/hls/package/master.m3u8", expiresAt, signer, "tenant-default")
+	lines := strings.Split(strings.TrimSpace(string(rewritten)), "\n")
+	variant, err := url.Parse(lines[2])
+	require.NoError(t, err)
+	segment, err := url.Parse(lines[4])
+	require.NoError(t, err)
+
+	require.NoError(t, signer.VerifyURLForTenant(&url.URL{Path: "/uploads/hls/package/720p/index.m3u8", RawQuery: variant.RawQuery}, "tenant-default"))
+	require.NoError(t, signer.VerifyURLForTenant(&url.URL{Path: "/uploads/hls/package/segment0.ts", RawQuery: segment.RawQuery}, "tenant-default"))
 }
 
 func TestMediaHandler_FolderAndHLSEndpoints(t *testing.T) {

@@ -533,12 +533,13 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "*")
 	key = strings.TrimPrefix(key, "/")
 
+	tenantID := ""
+	if tenant := tenancy.GetTenant(r.Context()); tenant != nil {
+		tenantID = tenant.ID
+	}
+
 	// If signed URLs are enabled, verify HMAC signature
 	if h.cfg != nil && h.cfg.Media.SignedURLs.Enabled && h.svc.Signer() != nil {
-		tenantID := ""
-		if tenant := tenancy.GetTenant(r.Context()); tenant != nil {
-			tenantID = tenant.ID
-		}
 		if err := h.svc.Signer().VerifyURLForTenant(r.URL, tenantID); err != nil {
 			if errors.Is(err, storage.ErrSignatureExpired) {
 				http.Error(w, "Access Denied: Signed URL has expired", http.StatusForbidden)
@@ -575,7 +576,9 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if h.cfg != nil && h.cfg.Media.SignedURLs.Enabled && r.URL.RawQuery != "" {
-			content = RewriteHLSPlaylistWithSignedParams(content, r.URL.RawQuery)
+			if expires, err := strconv.ParseInt(r.URL.Query().Get("expires"), 10, 64); err == nil {
+				content = RewriteHLSPlaylistWithPathSignedParams(content, "/uploads/"+key, time.Unix(expires, 0), h.svc.Signer(), tenantID)
+			}
 		}
 
 		_, _ = w.Write(content)

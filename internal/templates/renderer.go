@@ -52,6 +52,27 @@ func NewRenderer(
 	}
 }
 
+// ListThemes returns discovered theme manifests and marks the active theme.
+func (r *Renderer) ListThemes() []map[string]any {
+	active := r.themeMgr.ActiveThemeSlug()
+	manifests := r.themeMgr.List()
+	themes := make([]map[string]any, 0, len(manifests))
+	for _, manifest := range manifests {
+		themes = append(themes, map[string]any{
+			"name":              manifest.Name,
+			"slug":              manifest.Slug,
+			"version":           manifest.Version,
+			"description":       manifest.Description,
+			"author":            manifest.Author,
+			"engine":            manifest.Engine,
+			"minimumCmsVersion": manifest.MinimumCMSVersion,
+			"settings":          manifest.Settings,
+			"is_active":         manifest.Slug == active,
+		})
+	}
+	return themes
+}
+
 // GetTemplate compiles or retrieves from cache the template tree for a specific page.
 func (r *Renderer) GetTemplate(theme *themes.Theme, pageRelPath string) (*template.Template, error) {
 	cacheKey := fmt.Sprintf("%s:%s", theme.Manifest.Slug, pageRelPath)

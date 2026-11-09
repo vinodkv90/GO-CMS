@@ -72,7 +72,12 @@ func NewServer(
 	r.Use(func(next http.Handler) http.Handler {
 		return SecurityHeadersMiddlewareForEnvironment(next, cfg.Server.Env == "production")
 	})
-	r.Use(MaxBodySizeMiddleware(32 << 20)) // 32MB max request body ceiling
+	r.Use(MaxBodySizeMiddlewareByPath(32<<20, func(path string) int64 {
+		if strings.HasSuffix(path, "/media/hls") {
+			return media.MaxHLSRequestBodyBytes
+		}
+		return 32 << 20
+	}))
 
 	// Rate Limiting (50 req/sec, burst 100)
 	rateLimiter := NewIPRateLimiter(50.0, 100)
@@ -165,6 +170,11 @@ func NewServer(
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/ping", PingHandler)
 		api.Get("/openapi.yaml", OpenAPIHandler)
+		if renderer != nil {
+			api.Get("/themes", func(w http.ResponseWriter, r *http.Request) {
+				respondJSON(w, http.StatusOK, map[string]any{"data": renderer.ListThemes()})
+			})
+		}
 
 		if authSvc != nil {
 			authHandler := auth.NewHandler(authSvc)
