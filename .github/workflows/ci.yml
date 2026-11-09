@@ -62,7 +62,7 @@ jobs:
           npm run build
 
       - name: Run Go Benchmarks
-        run: go test -bench=. -benchmem ./...
+        run: go test -bench '^Benchmark' -benchmem ./internal/... ./pkg/... ./plugins/... ./tests/...
 
   unit-and-race:
     name: Unit Tests & Race Detection
