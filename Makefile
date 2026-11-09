@@ -1,20 +1,26 @@
-.PHONY: build test test-coverage lint run migrate-up migrate-status docker-up docker-down
+.PHONY: all build build-admin test test-coverage lint run migrate-up migrate-status docker-up docker-down clean
 
-# Build application binaries
+all: build-admin build test
+
+# Build application backend binaries
 build:
 	go build -v -o bin/cms-server ./cmd/server
 	go build -v -o bin/cms-migrate ./cmd/migrate
 
-# Run all unit and integration tests
+# Build React Admin SPA distribution
+build-admin:
+	cd admin && npm run build
+
+# Run all automated tests across all modules
 test:
-	go test -v -race ./...
+	go test -v ./...
 
 # Run test coverage report
 test-coverage:
-	go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	go test -coverprofile=coverage.out -covermode=atomic ./...
 	go tool cover -html=coverage.out -o coverage.html
 
-# Code formatting and static vet
+# Code formatting and static analysis
 lint:
 	go fmt ./...
 	go vet ./...
@@ -33,9 +39,12 @@ migrate-status:
 
 # Launch database and infrastructure containers
 docker-up:
-	docker compose up -d postgres redis
+	docker compose up -d postgres redis minio
 
 # Stop all containers
 docker-down:
 	docker compose down
 
+# Clean build artifacts
+clean:
+	rm -rf bin/ coverage.out coverage.html admin/dist

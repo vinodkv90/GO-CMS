@@ -222,6 +222,9 @@ func TestProductionCapabilitiesIntegration(t *testing.T) {
 	assert.NotNil(t, srv.Jobs())
 	assert.NotNil(t, srv.Localization())
 	assert.NotNil(t, srv.Search())
+	assert.NotNil(t, srv.Metrics())
+	assert.NotNil(t, srv.Audit())
+	assert.NotNil(t, srv.Tenancy())
 
 	// Test 1: GET /api/v1/locales
 	req1 := httptest.NewRequest("GET", "/api/v1/locales", nil)
@@ -241,7 +244,16 @@ func TestProductionCapabilitiesIntegration(t *testing.T) {
 	srv.Router().ServeHTTP(w2, req2)
 	assert.Equal(t, http.StatusOK, w2.Code)
 
-	// Test 3: Clean shutdown
+	// Test 3: GET /metrics (Prometheus scrape endpoint)
+	req3 := httptest.NewRequest("GET", "/metrics", nil)
+	w3 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w3, req3)
+	assert.Equal(t, http.StatusOK, w3.Code)
+	bodyBytes, err := io.ReadAll(w3.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(bodyBytes), "cms_http_requests_total")
+
+	// Test 4: Clean shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	err = srv.Shutdown(ctx)

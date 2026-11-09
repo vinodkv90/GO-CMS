@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/go-cms/cms/internal/audit"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/cache"
 	"github.com/go-cms/cms/internal/config"
@@ -21,27 +22,32 @@ import (
 	"github.com/go-cms/cms/internal/jobs"
 	"github.com/go-cms/cms/internal/localization"
 	"github.com/go-cms/cms/internal/media"
+	"github.com/go-cms/cms/internal/metrics"
 	"github.com/go-cms/cms/internal/plugins"
 	"github.com/go-cms/cms/internal/search"
 	"github.com/go-cms/cms/internal/templates"
+	"github.com/go-cms/cms/internal/tenancy"
 )
 
 // Server wraps the HTTP router and http.Server instance.
 type Server struct {
-	cfg          *config.Config
-	db           interfaces.Database
-	authSvc      *auth.Service
-	contentSvc   *content.Service
-	mediaSvc     *media.Service
-	pluginMgr    *plugins.Manager
-	renderer     *templates.Renderer
-	cache        cache.Cache
-	workerPool   *jobs.WorkerPool
-	locSvc       *localization.Service
-	searchEngine *search.Engine
-	logger       *slog.Logger
-	router       *chi.Mux
-	httpServer   *http.Server
+	cfg             *config.Config
+	db              interfaces.Database
+	authSvc         *auth.Service
+	contentSvc      *content.Service
+	mediaSvc        *media.Service
+	pluginMgr       *plugins.Manager
+	renderer        *templates.Renderer
+	cache           cache.Cache
+	workerPool      *jobs.WorkerPool
+	locSvc          *localization.Service
+	searchEngine    *search.Engine
+	metricsRegistry *metrics.Registry
+	auditSvc        *audit.Service
+	tenancySvc      *tenancy.Service
+	logger          *slog.Logger
+	router          *chi.Mux
+	httpServer      *http.Server
 }
 
 // NewServer configures and initializes a new HTTP Server.
@@ -64,10 +70,14 @@ func NewServer(
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeadersMiddleware)
 
-	// 2. Timeout Middleware
+	// 2. Metrics & Observability Middleware
+	metricsRegistry := metrics.NewRegistry()
+	r.Use(metricsRegistry.HTTPMiddleware)
+
+	// 3. Timeout Middleware
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// 3. CORS Configuration
+	// 4. CORS Configuration
 	corsOrigins := cfg.Server.CORSAllowedOrigins
 	if len(corsOrigins) == 0 {
 		corsOrigins = []string{"*"}
@@ -81,12 +91,16 @@ func NewServer(
 		MaxAge:           300,
 	}))
 
-	// 4. Auth Context Middleware
+	// 5. Multi-Tenancy Middleware
+	tenancySvc := tenancy.NewService()
+	r.Use(tenancy.Middleware(tenancySvc))
+
+	// 6. Auth Context Middleware
 	if authSvc != nil {
 		r.Use(auth.AuthMiddleware(authSvc))
 	}
 
-	// 5. Initialize Production Modules (Cache, Jobs, Localization, Search)
+	// 7. Initialize Production Modules (Cache, Jobs, Localization, Search, Audit)
 	cacheInst, err := cache.New(cfg.Cache)
 	if err != nil {
 		logger.Warn("Failed to initialize configured cache, falling back to in-memory", "error", err)
@@ -100,6 +114,8 @@ func NewServer(
 
 	searchEngine := search.NewEngine()
 	searchIndexer := search.NewIndexer(searchEngine)
+
+	auditSvc := audit.NewService(nil)
 
 	// If content service is active, attach lifecycle hooks for cache invalidation & search indexing
 	if contentSvc != nil && contentSvc.EventBus() != nil {
@@ -130,7 +146,8 @@ func NewServer(
 		})
 	}
 
-	// 6. Mount Health, Info, and API routes
+	// 6. Mount Metrics, Health, Info, and API routes
+	r.Handle("/metrics", metricsRegistry.Handler())
 	r.Get("/healthz", HealthHandler)
 	r.Get("/readyz", ReadinessHandler(db))
 	r.Get("/info", InfoHandler(cfg, db))
@@ -169,6 +186,14 @@ func NewServer(
 		// Full-Text Search
 		searchHandler := search.NewHTTPHandler(searchEngine)
 		searchHandler.RegisterRoutes(api)
+
+		// System Audit Logging
+		auditHandler := audit.NewHTTPHandler(auditSvc)
+		auditHandler.RegisterRoutes(api)
+
+		// Multi-Tenancy Management
+		tenancyHandler := tenancy.NewHTTPHandler(tenancySvc)
+		tenancyHandler.RegisterRoutes(api)
 	})
 
 	// 7. Mount Static Uploaded Files
@@ -195,20 +220,23 @@ func NewServer(
 	}
 
 	return &Server{
-		cfg:          cfg,
-		db:           db,
-		authSvc:      authSvc,
-		contentSvc:   contentSvc,
-		mediaSvc:     mediaSvc,
-		pluginMgr:    pluginMgr,
-		renderer:     renderer,
-		cache:        cacheInst,
-		workerPool:   workerPool,
-		locSvc:       locSvc,
-		searchEngine: searchEngine,
-		logger:       logger,
-		router:       r,
-		httpServer:   httpSrv,
+		cfg:             cfg,
+		db:              db,
+		authSvc:         authSvc,
+		contentSvc:      contentSvc,
+		mediaSvc:        mediaSvc,
+		pluginMgr:       pluginMgr,
+		renderer:        renderer,
+		cache:           cacheInst,
+		workerPool:      workerPool,
+		locSvc:          locSvc,
+		searchEngine:    searchEngine,
+		metricsRegistry: metricsRegistry,
+		auditSvc:        auditSvc,
+		tenancySvc:      tenancySvc,
+		logger:          logger,
+		router:          r,
+		httpServer:      httpSrv,
 	}
 }
 
@@ -268,6 +296,21 @@ func (s *Server) Localization() *localization.Service {
 // Search returns the full-text search engine instance.
 func (s *Server) Search() *search.Engine {
 	return s.searchEngine
+}
+
+// Metrics returns the Prometheus metrics registry.
+func (s *Server) Metrics() *metrics.Registry {
+	return s.metricsRegistry
+}
+
+// Audit returns the system audit logging service.
+func (s *Server) Audit() *audit.Service {
+	return s.auditSvc
+}
+
+// Tenancy returns the multi-tenant service.
+func (s *Server) Tenancy() *tenancy.Service {
+	return s.tenancySvc
 }
 
 // findAdminDist locates the compiled React Admin SPA directory.
