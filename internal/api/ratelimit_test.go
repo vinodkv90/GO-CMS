@@ -89,3 +89,4 @@ func TestMaxBodySizeMiddleware_RejectsOversizedPayload(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, wOver.Code)
 	assert.Contains(t, wOver.Body.String(), "request body entity too large")
 }
+

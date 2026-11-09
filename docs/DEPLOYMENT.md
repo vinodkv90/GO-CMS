@@ -219,3 +219,4 @@ Scrape Prometheus metrics every 15 seconds from `http://<pod-ip>:8080/metrics`:
 - **Error Rate (5xx):** `sum(rate(cms_http_requests_total{status=~"5.."}[5m])) / sum(rate(cms_http_requests_total[5m]))`
 - **P99 Latency:** `histogram_quantile(0.99, sum(rate(cms_http_request_duration_seconds_bucket[5m])) by (le))`
 - **Database Pool Saturation:** `cms_db_connections_in_use / cms_db_connections_open`
+

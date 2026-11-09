@@ -77,3 +77,4 @@ func BenchmarkValidateAccessToken(b *testing.B) {
 		_, _ = ValidateAccessToken(token, secret)
 	}
 }
+
