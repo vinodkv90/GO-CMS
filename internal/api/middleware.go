@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -12,6 +14,12 @@ import (
 
 // SecurityHeadersMiddleware adds essential security headers to every response.
 func SecurityHeadersMiddleware(next http.Handler) http.Handler {
+	return SecurityHeadersMiddlewareForEnvironment(next, false)
+}
+
+// SecurityHeadersMiddlewareForEnvironment adds response security headers and
+// enables HSTS only for production deployments served behind TLS.
+func SecurityHeadersMiddlewareForEnvironment(next http.Handler, production bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
@@ -20,8 +28,68 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self';")
 		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if production {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// TrustedRealIPMiddleware resolves the client address only when the direct
+// peer is a configured trusted proxy. It prevents clients from spoofing the
+// address used by rate limiting and audit logging.
+func TrustedRealIPMiddleware(trustedCIDRs []string) func(http.Handler) http.Handler {
+	trusted := make([]*net.IPNet, 0, len(trustedCIDRs))
+	for _, cidr := range trustedCIDRs {
+		if _, network, err := net.ParseCIDR(strings.TrimSpace(cidr)); err == nil {
+			trusted = append(trusted, network)
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer := remoteIP(r.RemoteAddr)
+			if peer != nil && isTrustedProxy(peer, trusted) {
+				if client := forwardedClientIP(r.Header.Get("X-Forwarded-For")); client != nil {
+					r.RemoteAddr = client.String()
+				} else if client := parseIP(r.Header.Get("X-Real-IP")); client != nil {
+					r.RemoteAddr = client.String()
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func remoteIP(address string) net.IP {
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		return parseIP(host)
+	}
+	return parseIP(address)
+}
+
+func parseIP(value string) net.IP {
+	return net.ParseIP(strings.TrimSpace(value))
+}
+
+func isTrustedProxy(ip net.IP, networks []*net.IPNet) bool {
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func forwardedClientIP(value string) net.IP {
+	parts := strings.Split(value, ",")
+	for index := len(parts) - 1; index >= 0; index-- {
+		if ip := parseIP(parts[index]); ip != nil {
+			return ip
+		}
+	}
+	return nil
 }
 
 // MaxBodySizeMiddleware rejects requests exceeding maxBytes to prevent memory exhaustion DoS.

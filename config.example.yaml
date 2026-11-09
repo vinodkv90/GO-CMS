@@ -32,8 +32,8 @@ logging:
   format: "text" # "text", "json"
 
 auth:
-  jwt_secret: "l3tjtNwOdnscoSemHT-vWv240XzubH4LGtGNViOY0vU"
-  session_secret: "vzvl-gotRFkn75EzKCSux1pY2l7nxzit5VVFfbd5IgE"
+  jwt_secret: "CHANGE_ME_WITH_A_RANDOM_32_BYTE_SECRET"
+  session_secret: "CHANGE_ME_WITH_A_RANDOM_32_BYTE_SECRET"
   token_expiration: 24h
 
 media:
@@ -43,7 +43,7 @@ media:
     enabled: true
     algorithm: "HMAC-SHA256"
     expiration: 1h
-    secret_key: "change-this-to-a-secure-media-signing-key"
+    secret_key: "CHANGE_ME_WITH_A_RANDOM_32_BYTE_SECRET"
 
 themes:
   active_theme: "default"
@@ -52,4 +52,3 @@ themes:
 
 plugins:
   plugins_dir: "./plugins"
-

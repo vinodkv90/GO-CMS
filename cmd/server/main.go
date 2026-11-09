@@ -72,7 +72,8 @@ func main() {
 
 		applied, err := runner.Up(context.Background())
 		if err != nil {
-			logger.Warn("Notice: Database migrations encountered an issue (check connection if DB not yet started)", "error", err)
+			logger.Error("Database migrations failed; refusing to start with an unknown schema", "error", err)
+			os.Exit(1)
 		} else if len(applied) > 0 {
 			logger.Info("Successfully applied database migrations", "count", len(applied), "versions", applied)
 		} else {

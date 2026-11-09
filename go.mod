@@ -1,6 +1,6 @@
 module github.com/go-cms/cms
 
-go 1.26.2
+go 1.26.10
 
 require (
 	github.com/go-chi/chi/v5 v5.5.0

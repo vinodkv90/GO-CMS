@@ -66,10 +66,12 @@ func NewServer(
 
 	// 1. Basic Middlewares
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(TrustedRealIPMiddleware(cfg.Server.TrustedProxies))
 	r.Use(StructuredLoggerMiddleware(logger))
 	r.Use(middleware.Recoverer)
-	r.Use(SecurityHeadersMiddleware)
+	r.Use(func(next http.Handler) http.Handler {
+		return SecurityHeadersMiddlewareForEnvironment(next, cfg.Server.Env == "production")
+	})
 	r.Use(MaxBodySizeMiddleware(32 << 20)) // 32MB max request body ceiling
 
 	// Rate Limiting (50 req/sec, burst 100)
@@ -104,6 +106,7 @@ func NewServer(
 	// 6. Auth Context Middleware
 	if authSvc != nil {
 		r.Use(auth.AuthMiddleware(authSvc))
+		r.Use(auth.CSRFMiddleware)
 	}
 
 	// 7. Initialize Production Modules (Cache, Jobs, Localization, Search, Audit)

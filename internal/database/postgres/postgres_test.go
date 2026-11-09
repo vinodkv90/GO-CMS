@@ -84,4 +84,3 @@ func TestPostgres_PingUnreachable(t *testing.T) {
 	err = pg.Ping(ctx)
 	assert.Error(t, err)
 }
-

@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -15,6 +18,7 @@ const (
 	ClaimsContextKey   contextKey = "cms_auth_claims"
 	APITokenContextKey contextKey = "cms_auth_api_token"
 	SessionCookieName             = "cms_token"
+	CSRFCookieName                = "cms_csrf"
 )
 
 // GetUserFromContext retrieves the authenticated User entity from context.
@@ -179,6 +183,19 @@ func SetAuthCookie(w http.ResponseWriter, token string, maxAge time.Duration, is
 		Secure:   isProduction,
 		SameSite: http.SameSiteLaxMode,
 	})
+
+	csrfBytes := make([]byte, 32)
+	if _, err := rand.Read(csrfBytes); err == nil {
+		http.SetCookie(w, &http.Cookie{
+			Name:     CSRFCookieName,
+			Value:    hex.EncodeToString(csrfBytes),
+			Path:     "/",
+			MaxAge:   int(maxAge.Seconds()),
+			HttpOnly: false,
+			Secure:   isProduction,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 // ClearAuthCookie clears the session cookie.
@@ -190,6 +207,27 @@ func ClearAuthCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{Name: CSRFCookieName, Value: "", Path: "/", MaxAge: -1, SameSite: http.SameSiteLaxMode})
+}
+
+// CSRFMiddleware protects cookie-authenticated state-changing requests with a
+// double-submit token. Bearer-token requests are not vulnerable to browser
+// cookie CSRF and are left unchanged.
+func CSRFMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions &&
+			r.Header.Get("Authorization") == "" {
+			if _, err := r.Cookie(SessionCookieName); err == nil {
+				cookie, cookieErr := r.Cookie(CSRFCookieName)
+				header := r.Header.Get("X-CSRF-Token")
+				if cookieErr != nil || header == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
+					respondAuthError(w, http.StatusForbidden, "CSRF validation failed")
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: root
+      POSTGRES_PASSWORD: ${CMS_POSTGRES_PASSWORD:?set CMS_POSTGRES_PASSWORD}
       POSTGRES_DB: go_cms_db
     ports:
       - "5433:5432"
@@ -26,10 +26,10 @@ services:
     container_name: cms-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_secret_password
+      MYSQL_ROOT_PASSWORD: ${CMS_MYSQL_ROOT_PASSWORD:?set CMS_MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: cms_db
       MYSQL_USER: cms
-      MYSQL_PASSWORD: cms_secret_password
+      MYSQL_PASSWORD: ${CMS_MYSQL_PASSWORD:?set CMS_MYSQL_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
@@ -76,13 +76,13 @@ services:
 
   # S3-Compatible Object Storage (MinIO)
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: cms-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadminpassword
+      MINIO_ROOT_USER: ${CMS_MINIO_ROOT_USER:?set CMS_MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${CMS_MINIO_ROOT_PASSWORD:?set CMS_MINIO_ROOT_PASSWORD}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -96,7 +96,7 @@ services:
 
   # Prometheus Metrics Collector
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.5.0
     container_name: cms-prometheus
     restart: unless-stopped
     ports:
@@ -123,16 +123,16 @@ services:
       CMS_DB_HOST: "postgres"
       CMS_DB_PORT: 5432
       CMS_DB_USER: "postgres"
-      CMS_DB_PASSWORD: "root"
+      CMS_DB_PASSWORD: ${CMS_POSTGRES_PASSWORD:?set CMS_POSTGRES_PASSWORD}
       CMS_DB_NAME: "go_cms_db"
       CMS_DB_SSLMODE: "disable"
       CMS_CACHE_DRIVER: "redis"
       CMS_CACHE_REDIS_URL: "redis://redis:6379/0"
       CMS_JOBS_ENABLED: "true"
       CMS_JOBS_CONCURRENCY: 4
-      CMS_AUTH_JWT_SECRET: "production-jwt-super-secret-key-32chars"
-      CMS_AUTH_SESSION_SECRET: "production-session-super-secret-key"
-      CMS_MEDIA_SIGNED_SECRET: "production-media-signed-hmac-key"
+      CMS_AUTH_JWT_SECRET: ${CMS_AUTH_JWT_SECRET:?set CMS_AUTH_JWT_SECRET}
+      CMS_AUTH_SESSION_SECRET: ${CMS_AUTH_SESSION_SECRET:?set CMS_AUTH_SESSION_SECRET}
+      CMS_MEDIA_SIGNED_SECRET: ${CMS_MEDIA_SIGNED_SECRET:?set CMS_MEDIA_SIGNED_SECRET}
     volumes:
       - uploads_data:/app/uploads
       - ./themes:/app/themes

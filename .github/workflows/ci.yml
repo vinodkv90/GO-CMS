@@ -21,7 +21,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.10'
           check-latest: true
           cache: true
 
@@ -37,10 +37,16 @@ jobs:
       - name: Run Go Vet
         run: go vet ./...
 
+      - name: Verify Go Modules
+        run: go mod verify
+
+      - name: Build Go Packages
+        run: go build ./...
+
       - name: Install and Run Govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./... || echo "Vulnerabilities reviewed in standard library/modules"
+          govulncheck ./...
 
       - name: Setup Node.js for Admin Build
         uses: actions/setup-node@v4
@@ -55,6 +61,9 @@ jobs:
           npm ci
           npm run build
 
+      - name: Run Go Benchmarks
+        run: go test -bench=. -benchmem ./...
+
   unit-and-race:
     name: Unit Tests & Race Detection
     runs-on: ubuntu-latest
@@ -65,7 +74,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.10'
           cache: true
 
       - name: Run Unit Tests with Race Detector
@@ -137,7 +146,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.10'
           cache: true
 
       - name: Run Database Migrations
@@ -189,8 +198,7 @@ jobs:
         with:
           image-ref: 'go-cms:ci-test'
           format: 'table'
-          exit-code: '0'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-

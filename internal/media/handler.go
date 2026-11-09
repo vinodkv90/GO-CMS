@@ -13,6 +13,7 @@ import (
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/storage"
+	"github.com/go-cms/cms/internal/tenancy"
 )
 
 // Handler handles media upload, retrieval, and file serving HTTP requests.
@@ -179,6 +180,10 @@ func (h *Handler) GetSignedURL(w http.ResponseWriter, r *http.Request) {
 	if ttl <= 0 {
 		ttl = 1 * time.Hour
 	}
+	if ttl > maxSignedURLTTL {
+		h.writeError(w, http.StatusBadRequest, "signed URL TTL cannot exceed 24 hours")
+		return
+	}
 
 	signedURL, err := h.svc.GenerateSignedURL(r.Context(), id, ttl)
 	if err != nil {
@@ -203,7 +208,11 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 
 	// If signed URLs are enabled, verify HMAC signature
 	if h.cfg != nil && h.cfg.Media.SignedURLs.Enabled && h.svc.Signer() != nil {
-		if err := h.svc.Signer().VerifyURL(r.URL); err != nil {
+		tenantID := ""
+		if tenant := tenancy.GetTenant(r.Context()); tenant != nil {
+			tenantID = tenant.ID
+		}
+		if err := h.svc.Signer().VerifyURLForTenant(r.URL, tenantID); err != nil {
 			if errors.Is(err, storage.ErrSignatureExpired) {
 				http.Error(w, "Access Denied: Signed URL has expired", http.StatusForbidden)
 				return

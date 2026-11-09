@@ -90,3 +90,31 @@ func TestMaxBodySizeMiddleware_RejectsOversizedPayload(t *testing.T) {
 	assert.Contains(t, wOver.Body.String(), "request body entity too large")
 }
 
+func TestTrustedRealIPMiddlewareDoesNotTrustUnconfiguredForwardedHeaders(t *testing.T) {
+	handler := TrustedRealIPMiddleware([]string{"10.0.0.0/8"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.RemoteAddr))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.10:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.20")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Contains(t, recorder.Body.String(), "192.0.2.10")
+	assert.NotContains(t, recorder.Body.String(), "203.0.113.20")
+}
+
+func TestTrustedRealIPMiddlewareUsesConfiguredProxy(t *testing.T) {
+	handler := TrustedRealIPMiddleware([]string{"10.0.0.0/8"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.RemoteAddr))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.20")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Contains(t, recorder.Body.String(), "203.0.113.20")
+}

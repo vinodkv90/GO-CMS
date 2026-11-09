@@ -299,13 +299,24 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Server.Env == "production" {
-		if c.Auth.JWTSecret == "default-insecure-jwt-secret-change-me" {
-			return fmt.Errorf("production environment requires a secure CMS_AUTH_JWT_SECRET")
+		if !isProductionSecret(c.Auth.JWTSecret, "default-insecure-jwt-secret-change-me") {
+			return fmt.Errorf("production environment requires CMS_AUTH_JWT_SECRET with at least 32 characters")
 		}
-		if c.Auth.SessionSecret == "default-insecure-session-secret-change-me" {
-			return fmt.Errorf("production environment requires a secure CMS_AUTH_SESSION_SECRET")
+		if !isProductionSecret(c.Auth.SessionSecret, "default-insecure-session-secret-change-me") {
+			return fmt.Errorf("production environment requires CMS_AUTH_SESSION_SECRET with at least 32 characters")
+		}
+		if !isProductionSecret(c.Media.SignedURLs.SecretKey, "default-media-secret-key-change-me") {
+			return fmt.Errorf("production environment requires CMS_MEDIA_SIGNED_SECRET with at least 32 characters")
 		}
 	}
 
 	return nil
+}
+
+func isProductionSecret(value, insecureDefault string) bool {
+	if len(value) < 32 || value == insecureDefault {
+		return false
+	}
+	return !strings.Contains(strings.ToLower(value), "change-me") &&
+		!strings.Contains(strings.ToLower(value), "super-secret")
 }

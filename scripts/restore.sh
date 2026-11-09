@@ -75,7 +75,7 @@ case "${DB_DRIVER}" in
         -U "${DB_USER}" \
         -d "${DB_NAME}" \
         --clean --if-exists -v \
-        "${BACKUP_SUBDIR}/database.dump" || true
+        "${BACKUP_SUBDIR}/database.dump"
     elif [ -f "${BACKUP_SUBDIR}/database.sql" ]; then
       PGPASSWORD="${DB_PASSWORD}" psql \
         -h "${DB_HOST}" \
@@ -122,4 +122,3 @@ fi
 echo "========================================================"
 echo " Restore completed successfully!"
 echo "========================================================"
-

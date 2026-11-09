@@ -12,7 +12,10 @@ import (
 
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/storage"
+	"github.com/go-cms/cms/internal/tenancy"
 )
+
+const maxSignedURLTTL = 24 * time.Hour
 
 // Service orchestrates media upload processing, metadata inspection, storage, and retrieval.
 type Service struct {
@@ -210,6 +213,9 @@ func (s *Service) DeleteAsset(ctx context.Context, id string) error {
 
 // GenerateSignedURL generates a temporary HMAC-SHA256 signed access URL for the asset.
 func (s *Service) GenerateSignedURL(ctx context.Context, id string, ttl time.Duration) (string, error) {
+	if ttl <= 0 || ttl > maxSignedURLTTL {
+		return "", fmt.Errorf("signed URL TTL must be between 1 second and 24 hours")
+	}
 	asset, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return "", err
@@ -224,7 +230,11 @@ func (s *Service) GenerateSignedURL(ctx context.Context, id string, ttl time.Dur
 		return rawURL, nil
 	}
 
-	return s.signer.Sign(rawURL, ttl)
+	tenantID := ""
+	if tenant := tenancy.GetTenant(ctx); tenant != nil {
+		tenantID = tenant.ID
+	}
+	return s.signer.SignForTenant(rawURL, ttl, tenantID)
 }
 
 // ResolveURL generates the standard access URL for an asset key, applying signatures if required.
@@ -235,7 +245,11 @@ func (s *Service) ResolveURL(ctx context.Context, storageKey string) (string, er
 	}
 
 	if s.cfg != nil && s.cfg.Media.SignedURLs.Enabled && s.signer != nil {
-		return s.signer.Sign(rawURL, s.cfg.Media.SignedURLs.Expiration)
+		tenantID := ""
+		if tenant := tenancy.GetTenant(ctx); tenant != nil {
+			tenantID = tenant.ID
+		}
+		return s.signer.SignForTenant(rawURL, s.cfg.Media.SignedURLs.Expiration, tenantID)
 	}
 
 	return rawURL, nil

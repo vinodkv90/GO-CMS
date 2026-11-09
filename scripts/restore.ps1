@@ -64,15 +64,17 @@ try {
                 $env:PGPASSWORD = $DB_PASS
                 if (Get-Command psql -ErrorAction SilentlyContinue) {
                     & psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f $sqlFile
+                    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL restore failed with exit code $LASTEXITCODE" }
                 } else {
-                    Write-Warning "psql command not found in PATH."
+                    throw "psql command not found in PATH."
                 }
             }
             "mysql" {
                 if (Get-Command mysql -ErrorAction SilentlyContinue) {
                     Get-Content $sqlFile | & mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASS $DB_NAME
+                    if ($LASTEXITCODE -ne 0) { throw "MySQL restore failed with exit code $LASTEXITCODE" }
                 } else {
-                    Write-Warning "mysql command not found in PATH."
+                    throw "mysql command not found in PATH."
                 }
             }
         }
@@ -97,4 +99,3 @@ finally {
         Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-

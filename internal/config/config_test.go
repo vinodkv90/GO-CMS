@@ -88,5 +88,6 @@ func TestConfigValidation(t *testing.T) {
 	// Production with custom secrets
 	cfg.Auth.JWTSecret = "very-strong-production-jwt-secret-key-12345"
 	cfg.Auth.SessionSecret = "very-strong-production-session-secret-key-67890"
+	cfg.Media.SignedURLs.SecretKey = "very-strong-production-media-secret-key-abcde"
 	assert.NoError(t, cfg.Validate())
 }

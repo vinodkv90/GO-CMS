@@ -83,3 +83,14 @@ func TestURLSigner_VerifyPath(t *testing.T) {
 	err = signer.VerifyPath("/uploads/test.png", expInt, sig)
 	assert.NoError(t, err)
 }
+
+func TestURLSigner_TenantIsolation(t *testing.T) {
+	signer := storage.NewURLSigner("test-secret", time.Hour)
+	signed, err := signer.SignForTenant("/uploads/file.png", time.Hour, "tenant-a")
+	require.NoError(t, err)
+
+	parsed, err := url.Parse(signed)
+	require.NoError(t, err)
+	assert.NoError(t, signer.VerifyURLForTenant(parsed, "tenant-a"))
+	assert.ErrorIs(t, signer.VerifyURLForTenant(parsed, "tenant-b"), storage.ErrInvalidSignature)
+}
