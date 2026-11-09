@@ -118,3 +118,4 @@ The React administration dashboard (`admin/src/views/MediaLibraryView.tsx`) incl
 - **Move Asset Dialog**: Relocate any asset to a selected folder.
 - **HLS Package Upload Tab**: Drag-and-drop `.zip` upload with title and progress status.
 - **Interactive HLS Player**: Embedded HTML5 player powered by `hls.js` with quality switching, variant inspection, and native Safari HLS fallback.
+
