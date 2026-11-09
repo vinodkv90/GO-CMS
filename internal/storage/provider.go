@@ -39,4 +39,10 @@ type StorageProvider interface {
 
 	// URL returns the public or relative access URL for the given key.
 	URL(ctx context.Context, key string) (string, error)
+
+	// Move renames or moves an object or directory from srcKey to dstKey.
+	Move(ctx context.Context, srcKey, dstKey string) error
+
+	// DeletePrefix deletes all objects matching the given key prefix or folder path.
+	DeletePrefix(ctx context.Context, prefix string) error
 }

@@ -13,11 +13,11 @@ func DefaultMigrations(driver string) []Migration {
 	var migrations []Migration
 
 	if driver == "postgres" {
-		migrations = append(migrations, postgresCoreMigration(), postgresContentEngineMigration())
+		migrations = append(migrations, postgresCoreMigration(), postgresContentEngineMigration(), postgresMediaFoldersMigration())
 	} else if driver == "mysql" {
-		migrations = append(migrations, mysqlCoreMigration(), mysqlContentEngineMigration())
+		migrations = append(migrations, mysqlCoreMigration(), mysqlContentEngineMigration(), mysqlMediaFoldersMigration())
 	} else if driver == "mongodb" {
-		migrations = append(migrations, mongoCoreMigration(), mongoContentEngineMigration())
+		migrations = append(migrations, mongoCoreMigration(), mongoContentEngineMigration(), mongoMediaFoldersMigration())
 	}
 
 	return migrations
@@ -456,6 +456,102 @@ func mongoContentEngineMigration() Migration {
 				}
 			}
 			return nil
+		},
+	}
+}
+
+func postgresMediaFoldersMigration() Migration {
+	upSQL := `
+	CREATE TABLE IF NOT EXISTS cms_media_folders (
+		id VARCHAR(36) PRIMARY KEY,
+		name VARCHAR(100) NOT NULL,
+		slug VARCHAR(100) NOT NULL,
+		parent_id VARCHAR(36) REFERENCES cms_media_folders(id) ON DELETE CASCADE,
+		path TEXT NOT NULL,
+		storage_path TEXT NOT NULL,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		created_by VARCHAR(36)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_media_folders_parent ON cms_media_folders(parent_id);
+	CREATE INDEX IF NOT EXISTS idx_media_folders_path ON cms_media_folders(path);
+
+	ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS folder_id VARCHAR(36) REFERENCES cms_media_folders(id) ON DELETE SET NULL;
+	CREATE INDEX IF NOT EXISTS idx_cms_media_folder ON cms_media(folder_id);
+	`
+
+	downSQL := `
+	DROP INDEX IF EXISTS idx_cms_media_folder;
+	ALTER TABLE cms_media DROP COLUMN IF EXISTS folder_id;
+	DROP TABLE IF EXISTS cms_media_folders;
+	`
+
+	return Migration{
+		Version: "202611090001",
+		Name:    "media_folders_schema",
+		UpSQL:   upSQL,
+		DownSQL: downSQL,
+	}
+}
+
+func mysqlMediaFoldersMigration() Migration {
+	upSQL := `
+	CREATE TABLE IF NOT EXISTS cms_media_folders (
+		id VARCHAR(36) PRIMARY KEY,
+		name VARCHAR(100) NOT NULL,
+		slug VARCHAR(100) NOT NULL,
+		parent_id VARCHAR(36) NULL,
+		path TEXT NOT NULL,
+		storage_path TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		created_by VARCHAR(36) NULL,
+		KEY idx_media_folders_parent (parent_id),
+		KEY idx_media_folders_path (path(255)),
+		CONSTRAINT fk_media_folder_parent FOREIGN KEY (parent_id) REFERENCES cms_media_folders(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+	ALTER TABLE cms_media ADD COLUMN folder_id VARCHAR(36) NULL;
+	CREATE INDEX idx_cms_media_folder ON cms_media(folder_id);
+	`
+
+	downSQL := `
+	DROP TABLE IF EXISTS cms_media_folders;
+	`
+
+	return Migration{
+		Version: "202611090001",
+		Name:    "media_folders_schema",
+		UpSQL:   upSQL,
+		DownSQL: downSQL,
+	}
+}
+
+func mongoMediaFoldersMigration() Migration {
+	return Migration{
+		Version: "202611090001",
+		Name:    "media_folders_schema",
+		UpMongo: func(ctx context.Context, db *mongo.Database) error {
+			foldersCol := db.Collection("cms_media_folders")
+			mediaCol := db.Collection("cms_media")
+
+			_, err := foldersCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+				{Keys: bson.D{{Key: "parent_id", Value: 1}}},
+				{Keys: bson.D{{Key: "path", Value: 1}}},
+				{Keys: bson.D{{Key: "slug", Value: 1}, {Key: "parent_id", Value: 1}}},
+			})
+			if err != nil {
+				return err
+			}
+
+			_, err = mediaCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+				Keys: bson.D{{Key: "folder_id", Value: 1}},
+			})
+			return err
+		},
+		DownMongo: func(ctx context.Context, db *mongo.Database) error {
+			return db.Collection("cms_media_folders").Drop(ctx)
 		},
 	}
 }

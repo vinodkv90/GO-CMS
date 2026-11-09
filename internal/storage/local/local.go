@@ -157,3 +157,115 @@ func (p *Provider) URL(ctx context.Context, key string) (string, error) {
 	cleanKey := strings.TrimPrefix(filepath.ToSlash(key), "/")
 	return fmt.Sprintf("%s/%s", p.urlPrefix, cleanKey), nil
 }
+
+// Move renames or moves a file or directory from srcKey to dstKey on the filesystem.
+func (p *Provider) Move(ctx context.Context, srcKey, dstKey string) error {
+	srcPath, err := p.resolvePath(srcKey)
+	if err != nil {
+		return err
+	}
+	dstPath, err := p.resolvePath(dstKey)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(srcPath); err != nil {
+		if os.IsNotExist(err) {
+			return storage.ErrFileNotFound
+		}
+		return err
+	}
+
+	dstDir := filepath.Dir(dstPath)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory %q: %w", dstDir, err)
+	}
+
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		// If rename fails (e.g. across mount points), fall back to copy and remove
+		if copyErr := p.copyRecursively(srcPath, dstPath); copyErr != nil {
+			return fmt.Errorf("failed to move %q to %q: %w", srcPath, dstPath, copyErr)
+		}
+		_ = os.RemoveAll(srcPath)
+	}
+
+	return nil
+}
+
+// copyRecursively copies files or directories from src to dst.
+func (p *Provider) copyRecursively(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, 0755); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			s := filepath.Join(src, entry.Name())
+			d := filepath.Join(dst, entry.Name())
+			if err := p.copyRecursively(s, d); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// DeletePrefix deletes all files and directories matching prefix.
+func (p *Provider) DeletePrefix(ctx context.Context, prefix string) error {
+	cleanPrefix := strings.Trim(filepath.ToSlash(prefix), "/")
+	if cleanPrefix == "" || cleanPrefix == "." {
+		return fmt.Errorf("refusing to delete empty prefix / root storage")
+	}
+
+	fullPath, err := p.resolvePath(prefix)
+	if err != nil {
+		return err
+	}
+
+	// If the path exists as directory or file, remove it directly
+	if _, err := os.Stat(fullPath); err == nil {
+		return os.RemoveAll(fullPath)
+	}
+
+	// Also check if prefix is a file prefix (e.g. thumb pattern) inside parent
+	dir := filepath.Dir(fullPath)
+	base := filepath.Base(fullPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), base) {
+			_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+		}
+	}
+
+	return nil
+}

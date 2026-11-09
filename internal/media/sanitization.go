@@ -78,3 +78,28 @@ func GenerateStorageKey(sanitizedName string) (string, string) {
 
 	return id, storageKey
 }
+
+// SlugifyFolder converts a folder name into a safe URL and directory path slug.
+func SlugifyFolder(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	name = strings.ReplaceAll(name, " ", "-")
+	name = strings.ReplaceAll(name, "_", "-")
+	name = disallowedCharsRegex.ReplaceAllString(name, "")
+	name = multiHyphenRegex.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-.")
+	if name == "" {
+		return "folder"
+	}
+	return name
+}
+
+// GenerateFolderStorageKey creates a collision-proof storage key within a folder prefix:
+// e.g. "blog/articles/2026/11/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d_sanitized-name.png"
+func GenerateFolderStorageKey(folderStoragePath, sanitizedName string) (string, string) {
+	id, relKey := GenerateStorageKey(sanitizedName)
+	cleanPrefix := strings.Trim(folderStoragePath, "/")
+	if cleanPrefix == "" {
+		return id, relKey
+	}
+	return id, cleanPrefix + "/" + relKey
+}

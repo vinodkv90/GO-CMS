@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,9 +52,9 @@ func (r *SQLRepository) Create(ctx context.Context, asset *MediaAsset) error {
 
 	query := r.rebind(`
 		INSERT INTO cms_media (
-			id, filename, original_name, mime_type, file_size,
+			id, folder_id, filename, original_name, mime_type, file_size,
 			storage_provider, storage_key, metadata, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 
 	now := time.Now().UTC()
@@ -68,6 +69,7 @@ func (r *SQLRepository) Create(ctx context.Context, asset *MediaAsset) error {
 		ctx,
 		query,
 		asset.ID,
+		asset.FolderID,
 		asset.Filename,
 		asset.OriginalName,
 		asset.MIMEType,
@@ -88,33 +90,56 @@ func (r *SQLRepository) Create(ctx context.Context, asset *MediaAsset) error {
 // GetByID retrieves a media record by ID.
 func (r *SQLRepository) GetByID(ctx context.Context, id string) (*MediaAsset, error) {
 	query := r.rebind(`
-		SELECT id, filename, original_name, mime_type, file_size,
+		SELECT id, folder_id, filename, original_name, mime_type, file_size,
 		       storage_provider, storage_key, metadata, created_at, updated_at
 		FROM cms_media
 		WHERE id = ?
 	`)
 
 	row := r.db.QueryRowContext(ctx, query, id)
-	return r.scanRow(row)
+	a, err := scanAsset(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAssetNotFound
+		}
+		return nil, fmt.Errorf("failed to scan media row: %w", err)
+	}
+	return a, nil
 }
 
 // GetByKey retrieves a media record by its storage key.
 func (r *SQLRepository) GetByKey(ctx context.Context, storageKey string) (*MediaAsset, error) {
 	query := r.rebind(`
-		SELECT id, filename, original_name, mime_type, file_size,
+		SELECT id, folder_id, filename, original_name, mime_type, file_size,
 		       storage_provider, storage_key, metadata, created_at, updated_at
 		FROM cms_media
 		WHERE storage_key = ?
 	`)
 
 	row := r.db.QueryRowContext(ctx, query, storageKey)
-	return r.scanRow(row)
+	a, err := scanAsset(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAssetNotFound
+		}
+		return nil, fmt.Errorf("failed to scan media row: %w", err)
+	}
+	return a, nil
 }
 
 // List queries media assets with pagination and filters.
 func (r *SQLRepository) List(ctx context.Context, filter MediaFilter) ([]*MediaAsset, int, error) {
 	var whereClauses []string
 	var args []any
+
+	if filter.FolderID != nil {
+		if *filter.FolderID == "" {
+			whereClauses = append(whereClauses, "folder_id IS NULL")
+		} else {
+			whereClauses = append(whereClauses, "folder_id = ?")
+			args = append(args, *filter.FolderID)
+		}
+	}
 
 	if filter.Search != "" {
 		whereClauses = append(whereClauses, "(filename LIKE ? OR original_name LIKE ?)")
@@ -156,7 +181,7 @@ func (r *SQLRepository) List(ctx context.Context, filter MediaFilter) ([]*MediaA
 	}
 
 	selectSQL := fmt.Sprintf(`
-		SELECT id, filename, original_name, mime_type, file_size,
+		SELECT id, folder_id, filename, original_name, mime_type, file_size,
 		       storage_provider, storage_key, metadata, created_at, updated_at
 		FROM cms_media
 		%s
@@ -173,29 +198,11 @@ func (r *SQLRepository) List(ctx context.Context, filter MediaFilter) ([]*MediaA
 
 	var assets []*MediaAsset
 	for rows.Next() {
-		var a MediaAsset
-		var metaRaw []byte
-		err := rows.Scan(
-			&a.ID,
-			&a.Filename,
-			&a.OriginalName,
-			&a.MIMEType,
-			&a.FileSize,
-			&a.StorageProvider,
-			&a.StorageKey,
-			&metaRaw,
-			&a.CreatedAt,
-			&a.UpdatedAt,
-		)
+		a, err := scanAsset(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan media row: %w", err)
 		}
-
-		if len(metaRaw) > 0 {
-			_ = json.Unmarshal(metaRaw, &a.Metadata)
-		}
-
-		assets = append(assets, &a)
+		assets = append(assets, a)
 	}
 
 	return assets, total, nil
@@ -231,6 +238,29 @@ func (r *SQLRepository) Update(ctx context.Context, asset *MediaAsset) error {
 	return nil
 }
 
+// UpdateAssetFolder moves an asset to a new folder and updates its storage key.
+func (r *SQLRepository) UpdateAssetFolder(ctx context.Context, assetID string, targetFolderID *string, newStorageKey string) error {
+	filename := filepath.Base(newStorageKey)
+	now := time.Now().UTC()
+	query := r.rebind(`
+		UPDATE cms_media
+		SET folder_id = ?, storage_key = ?, filename = ?, updated_at = ?
+		WHERE id = ?
+	`)
+	res, err := r.db.ExecContext(ctx, query, targetFolderID, newStorageKey, filename, now, assetID)
+	if err != nil {
+		return fmt.Errorf("failed to update asset folder: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrAssetNotFound
+	}
+	return nil
+}
+
 // Delete removes an asset record from cms_media.
 func (r *SQLRepository) Delete(ctx context.Context, id string) error {
 	query := r.rebind("DELETE FROM cms_media WHERE id = ?")
@@ -250,12 +280,225 @@ func (r *SQLRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r *SQLRepository) scanRow(row *sql.Row) (*MediaAsset, error) {
+// CreateFolder creates a new media folder.
+func (r *SQLRepository) CreateFolder(ctx context.Context, folder *MediaFolder) error {
+	now := time.Now().UTC()
+	if folder.CreatedAt.IsZero() {
+		folder.CreatedAt = now
+	}
+	if folder.UpdatedAt.IsZero() {
+		folder.UpdatedAt = now
+	}
+
+	query := r.rebind(`
+		INSERT INTO cms_media_folders (
+			id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+
+	_, err := r.db.ExecContext(
+		ctx,
+		query,
+		folder.ID,
+		folder.Name,
+		folder.Slug,
+		folder.ParentID,
+		folder.Path,
+		folder.StoragePath,
+		folder.CreatedAt,
+		folder.UpdatedAt,
+		folder.CreatedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert media folder: %w", err)
+	}
+	return nil
+}
+
+// GetFolderByID retrieves a media folder by ID.
+func (r *SQLRepository) GetFolderByID(ctx context.Context, id string) (*MediaFolder, error) {
+	query := r.rebind(`
+		SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+		FROM cms_media_folders
+		WHERE id = ?
+	`)
+	row := r.db.QueryRowContext(ctx, query, id)
+	f, err := scanFolder(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrFolderNotFound
+		}
+		return nil, fmt.Errorf("failed to get folder by id: %w", err)
+	}
+	return f, nil
+}
+
+// GetFolderByPath retrieves a folder by canonical path.
+func (r *SQLRepository) GetFolderByPath(ctx context.Context, path string) (*MediaFolder, error) {
+	query := r.rebind(`
+		SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+		FROM cms_media_folders
+		WHERE path = ?
+	`)
+	row := r.db.QueryRowContext(ctx, query, path)
+	f, err := scanFolder(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrFolderNotFound
+		}
+		return nil, fmt.Errorf("failed to get folder by path: %w", err)
+	}
+	return f, nil
+}
+
+// ListFolders returns folders under parentID (or all folders if parentID is nil).
+func (r *SQLRepository) ListFolders(ctx context.Context, parentID *string) ([]*MediaFolder, error) {
+	var query string
+	var args []any
+
+	if parentID == nil {
+		query = r.rebind(`
+			SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+			FROM cms_media_folders
+			ORDER BY name ASC
+		`)
+	} else if *parentID == "" {
+		query = r.rebind(`
+			SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+			FROM cms_media_folders
+			WHERE parent_id IS NULL
+			ORDER BY name ASC
+		`)
+	} else {
+		query = r.rebind(`
+			SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+			FROM cms_media_folders
+			WHERE parent_id = ?
+			ORDER BY name ASC
+		`)
+		args = append(args, *parentID)
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list folders: %w", err)
+	}
+	defer rows.Close()
+
+	var folders []*MediaFolder
+	for rows.Next() {
+		f, err := scanFolder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan folder: %w", err)
+		}
+		folders = append(folders, f)
+	}
+	return folders, nil
+}
+
+// GetAllFolders returns all folders ordered by path.
+func (r *SQLRepository) GetAllFolders(ctx context.Context) ([]*MediaFolder, error) {
+	query := r.rebind(`
+		SELECT id, name, slug, parent_id, path, storage_path, created_at, updated_at, created_by
+		FROM cms_media_folders
+		ORDER BY path ASC
+	`)
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all folders: %w", err)
+	}
+	defer rows.Close()
+
+	var folders []*MediaFolder
+	for rows.Next() {
+		f, err := scanFolder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan folder: %w", err)
+		}
+		folders = append(folders, f)
+	}
+	return folders, nil
+}
+
+// UpdateFolder updates folder metadata and path.
+func (r *SQLRepository) UpdateFolder(ctx context.Context, folder *MediaFolder) error {
+	folder.UpdatedAt = time.Now().UTC()
+	query := r.rebind(`
+		UPDATE cms_media_folders
+		SET name = ?, slug = ?, parent_id = ?, path = ?, storage_path = ?, updated_at = ?
+		WHERE id = ?
+	`)
+	res, err := r.db.ExecContext(ctx, query, folder.Name, folder.Slug, folder.ParentID, folder.Path, folder.StoragePath, folder.UpdatedAt, folder.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update folder: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrFolderNotFound
+	}
+	return nil
+}
+
+// DeleteFolder removes a folder from the database.
+func (r *SQLRepository) DeleteFolder(ctx context.Context, id string) error {
+	query := r.rebind("DELETE FROM cms_media_folders WHERE id = ?")
+	res, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete folder: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrFolderNotFound
+	}
+	return nil
+}
+
+// GetAssetsByFolderID retrieves all media assets within a folder.
+func (r *SQLRepository) GetAssetsByFolderID(ctx context.Context, folderID string) ([]*MediaAsset, error) {
+	query := r.rebind(`
+		SELECT id, folder_id, filename, original_name, mime_type, file_size,
+		       storage_provider, storage_key, metadata, created_at, updated_at
+		FROM cms_media
+		WHERE folder_id = ?
+		ORDER BY created_at DESC
+	`)
+	rows, err := r.db.QueryContext(ctx, query, folderID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get assets by folder: %w", err)
+	}
+	defer rows.Close()
+
+	var assets []*MediaAsset
+	for rows.Next() {
+		a, err := scanAsset(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan asset: %w", err)
+		}
+		assets = append(assets, a)
+	}
+	return assets, nil
+}
+
+// GetSubfolders returns subfolders directly under parentID.
+func (r *SQLRepository) GetSubfolders(ctx context.Context, parentID string) ([]*MediaFolder, error) {
+	p := &parentID
+	return r.ListFolders(ctx, p)
+}
+
+func scanAsset(scanner interface{ Scan(dest ...any) error }) (*MediaAsset, error) {
 	var a MediaAsset
+	var folderID sql.NullString
 	var metaRaw []byte
 
-	err := row.Scan(
+	err := scanner.Scan(
 		&a.ID,
+		&folderID,
 		&a.Filename,
 		&a.OriginalName,
 		&a.MIMEType,
@@ -267,15 +510,45 @@ func (r *SQLRepository) scanRow(row *sql.Row) (*MediaAsset, error) {
 		&a.UpdatedAt,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrAssetNotFound
-		}
-		return nil, fmt.Errorf("failed to scan media row: %w", err)
+		return nil, err
 	}
 
+	if folderID.Valid {
+		a.FolderID = &folderID.String
+	}
 	if len(metaRaw) > 0 {
 		_ = json.Unmarshal(metaRaw, &a.Metadata)
 	}
 
 	return &a, nil
+}
+
+func scanFolder(scanner interface{ Scan(dest ...any) error }) (*MediaFolder, error) {
+	var f MediaFolder
+	var parentID sql.NullString
+	var createdBy sql.NullString
+
+	err := scanner.Scan(
+		&f.ID,
+		&f.Name,
+		&f.Slug,
+		&parentID,
+		&f.Path,
+		&f.StoragePath,
+		&f.CreatedAt,
+		&f.UpdatedAt,
+		&createdBy,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if parentID.Valid {
+		f.ParentID = &parentID.String
+	}
+	if createdBy.Valid {
+		f.CreatedBy = &createdBy.String
+	}
+
+	return &f, nil
 }

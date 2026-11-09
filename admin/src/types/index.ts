@@ -101,8 +101,26 @@ export interface ContentVersion {
   created_at: string;
 }
 
+export interface MediaFolder {
+  id: string;
+  name: string;
+  slug: string;
+  parent_id?: string | null;
+  path: string;
+  storage_path: string;
+  created_at: string;
+  updated_at: string;
+  created_by?: string | null;
+}
+
+export interface MediaFolderTreeNode extends MediaFolder {
+  children: MediaFolderTreeNode[];
+  asset_count: number;
+}
+
 export interface MediaAsset {
   id: string;
+  folder_id?: string | null;
   filename: string;
   original_name: string;
   mime_type: string;
@@ -117,6 +135,7 @@ export interface MediaAsset {
     caption?: string;
     format?: string;
     thumbnails?: Record<string, string>;
+    custom?: Record<string, any>;
   };
   created_at: string;
 }

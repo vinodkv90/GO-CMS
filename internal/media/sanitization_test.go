@@ -38,3 +38,28 @@ func TestGenerateStorageKey(t *testing.T) {
 	assert.Contains(t, key, "/")
 	assert.Contains(t, key, id)
 }
+
+func TestSlugifyFolder(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Blog Articles", "blog-articles"},
+		{"Products & Electronics!", "products-electronics"},
+		{"  Nested / Child Folder  ", "nested-child-folder"},
+		{"Tutorials_2026", "tutorials-2026"},
+		{"", "folder"},
+	}
+
+	for _, tc := range tests {
+		actual := media.SlugifyFolder(tc.input)
+		assert.Equal(t, tc.expected, actual)
+	}
+}
+
+func TestGenerateFolderStorageKey(t *testing.T) {
+	id, key := media.GenerateFolderStorageKey("blog/articles/", "go-cms.jpg")
+	assert.NotEmpty(t, id)
+	assert.True(t, strings.HasPrefix(key, "blog/articles/"))
+	assert.True(t, strings.HasSuffix(key, "go-cms.jpg"))
+}

@@ -105,3 +105,72 @@ func TestLocalProvider_PathTraversalDefenses(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalProvider_Move_And_DeletePrefix(t *testing.T) {
+	tempDir := t.TempDir()
+	p, err := local.New(tempDir, "/uploads")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. Move file
+	srcKey := "blog/articles/old-photo.jpg"
+	dstKey := "blog/archive/new-photo.jpg"
+	content := []byte("image binary payload")
+
+	require.NoError(t, p.Save(ctx, srcKey, bytes.NewReader(content), int64(len(content)), "image/jpeg"))
+
+	// Verify src exists before move
+	exists, err := p.Exists(ctx, srcKey)
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// Move
+	require.NoError(t, p.Move(ctx, srcKey, dstKey))
+
+	// Verify src no longer exists, dst exists with content
+	exists, err = p.Exists(ctx, srcKey)
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	exists, err = p.Exists(ctx, dstKey)
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	rc, err := p.Open(ctx, dstKey)
+	require.NoError(t, err)
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	_ = rc.Close()
+	assert.Equal(t, content, data)
+
+	// 2. Move directory
+	dirSrcKey := "blog/archive"
+	dirDstKey := "blog/historical"
+	require.NoError(t, p.Move(ctx, dirSrcKey, dirDstKey))
+
+	// Old file under moved dir doesn't exist, new file does
+	exists, err = p.Exists(ctx, "blog/archive/new-photo.jpg")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	exists, err = p.Exists(ctx, "blog/historical/new-photo.jpg")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// 3. DeletePrefix
+	require.NoError(t, p.Save(ctx, "blog/historical/extra.jpg", bytes.NewReader(content), int64(len(content)), "image/jpeg"))
+	require.NoError(t, p.DeletePrefix(ctx, "blog/historical"))
+
+	exists, err = p.Exists(ctx, "blog/historical/new-photo.jpg")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	exists, err = p.Exists(ctx, "blog/historical/extra.jpg")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// 4. Moving non-existent source returns ErrFileNotFound
+	err = p.Move(ctx, "nonexistent/file.png", "destination/file.png")
+	assert.ErrorIs(t, err, storage.ErrFileNotFound)
+}

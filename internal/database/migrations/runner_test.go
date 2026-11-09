@@ -53,22 +53,27 @@ func TestSplitStatements(t *testing.T) {
 
 func TestDefaultMigrations(t *testing.T) {
 	pgMigrations := DefaultMigrations("postgres")
-	assert.Len(t, pgMigrations, 2)
+	assert.Len(t, pgMigrations, 3)
 	assert.Equal(t, "202611080001", pgMigrations[0].Version)
 	assert.Equal(t, "202611080002", pgMigrations[1].Version)
+	assert.Equal(t, "202611090001", pgMigrations[2].Version)
 	assert.Contains(t, pgMigrations[0].UpSQL, "cms_roles")
 	assert.Contains(t, pgMigrations[0].UpSQL, "cms_users")
 	assert.Contains(t, pgMigrations[1].UpSQL, "content_types")
+	assert.Contains(t, pgMigrations[2].UpSQL, "cms_media_folders")
 
 	myMigrations := DefaultMigrations("mysql")
-	assert.Len(t, myMigrations, 2)
+	assert.Len(t, myMigrations, 3)
 	assert.Equal(t, "202611080001", myMigrations[0].Version)
 	assert.Equal(t, "202611080002", myMigrations[1].Version)
+	assert.Equal(t, "202611090001", myMigrations[2].Version)
+	assert.Contains(t, myMigrations[2].UpSQL, "cms_media_folders")
 
 	mongoMigrations := DefaultMigrations("mongodb")
-	assert.Len(t, mongoMigrations, 2)
+	assert.Len(t, mongoMigrations, 3)
 	assert.Equal(t, "202611080001", mongoMigrations[0].Version)
 	assert.Equal(t, "202611080002", mongoMigrations[1].Version)
+	assert.Equal(t, "202611090001", mongoMigrations[2].Version)
 }
 
 // MockDatabase for testing Runner orchestration
@@ -88,5 +93,5 @@ func TestRunner_Register(t *testing.T) {
 	assert.Empty(t, runner.Migrations())
 
 	runner.Register(DefaultMigrations("postgres")...)
-	assert.Len(t, runner.Migrations(), 2)
+	assert.Len(t, runner.Migrations(), 3)
 }

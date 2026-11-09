@@ -326,6 +326,11 @@ paths:
       summary: List uploaded media assets
       tags: [Media Library]
       parameters:
+        - name: folder_id
+          in: query
+          schema:
+            type: string
+          description: Optional folder ID or "root" for unorganized assets
         - name: search
           in: query
           schema:
@@ -334,6 +339,14 @@ paths:
           in: query
           schema:
             type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
       responses:
         '200':
           description: Array of media assets
@@ -353,6 +366,9 @@ paths:
                 file:
                   type: string
                   format: binary
+                folder_id:
+                  type: string
+                  description: Optional target folder ID
                 alt_text:
                   type: string
                 caption:
@@ -360,6 +376,216 @@ paths:
       responses:
         '201':
           description: Asset uploaded
+
+  /media/hls:
+    post:
+      summary: Upload complete HLS video stream package (.zip)
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: ZIP archive containing master playlist, variant playlists, segments (.ts/.m4s), and subtitles (.vtt)
+                title:
+                  type: string
+                  description: Optional display title
+                folder_id:
+                  type: string
+                  description: Optional target folder ID
+      responses:
+        '201':
+          description: HLS video package uploaded and master asset created
+        '400':
+          description: Invalid package, zip bomb detected, or missing referenced segments
+
+  /media/{id}/move:
+    post:
+      summary: Move media asset to a target folder
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_folder_id:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Asset relocated to new folder
+
+  /media/tree:
+    get:
+      summary: Retrieve complete hierarchical folder tree
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Nested folder hierarchy with asset counts
+
+  /media/folders:
+    get:
+      summary: List media folders
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: parent_id
+          in: query
+          schema:
+            type: string
+          description: Filter by parent folder ID or "root"
+      responses:
+        '200':
+          description: Array of media folders
+    post:
+      summary: Create a new media folder
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                parent_id:
+                  type: string
+                  nullable: true
+      responses:
+        '201':
+          description: Folder created
+        '409':
+          description: Duplicate folder name under same parent
+
+  /media/folders/{id}:
+    get:
+      summary: Get media folder details
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Folder details
+    put:
+      summary: Rename media folder and sync storage paths
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Folder renamed and storage prefix synchronized
+    delete:
+      summary: Delete media folder
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: recursive
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Folder deleted
+        '409':
+          description: Folder not empty and recursive not specified
+
+  /media/folders/{id}/contents:
+    get:
+      summary: Get subfolders and assets within folder
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Folder contents including subfolders and assets
+
+  /media/folders/{id}/move:
+    post:
+      summary: Move folder to new parent folder
+      tags: [Media Library]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_parent_id:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Folder moved
+        '400':
+          description: Circular reference detected
 
   /media/{id}/signed-url:
     get:

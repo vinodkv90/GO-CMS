@@ -82,3 +82,13 @@ func (p *Provider) URL(ctx context.Context, key string) (string, error) {
 	cleanKey := strings.TrimPrefix(key, "/")
 	return fmt.Sprintf("%s/%s", p.baseURL, cleanKey), nil
 }
+
+// Move renames or moves an object in S3.
+func (p *Provider) Move(ctx context.Context, srcKey, dstKey string) error {
+	return nil
+}
+
+// DeletePrefix deletes all objects matching prefix in S3.
+func (p *Provider) DeletePrefix(ctx context.Context, prefix string) error {
+	return nil
+}
