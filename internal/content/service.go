@@ -270,6 +270,7 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 	entry := &ContentEntry{
 		ID:               entryID,
 		ContentTypeID:    ct.ID,
+		ContentTypeUID:   ct.UID,
 		Slug:             slug,
 		DraftData:        data,
 		Status:           StatusDraft,

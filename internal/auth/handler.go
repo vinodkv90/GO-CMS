@@ -54,6 +54,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 type LoginRequestBody struct {
 	Identifier string `json:"identifier"`
+	Username   string `json:"username"`
 	Password   string `json:"password"`
 }
 
@@ -65,7 +66,12 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, err := h.svc.Authenticate(r.Context(), body.Identifier, body.Password)
+	identifier := body.Identifier
+	if identifier == "" {
+		identifier = body.Username
+	}
+
+	user, token, err := h.svc.Authenticate(r.Context(), identifier, body.Password)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if err == ErrUserSuspended {

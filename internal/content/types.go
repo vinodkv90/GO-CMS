@@ -52,6 +52,7 @@ type ContentType struct {
 type ContentEntry struct {
 	ID               string         `json:"id" bson:"_id"`
 	ContentTypeID    string         `json:"content_type_id" bson:"content_type_id"`
+	ContentTypeUID   string         `json:"content_type_uid,omitempty" bson:"content_type_uid,omitempty"`
 	Slug             string         `json:"slug,omitempty" bson:"slug,omitempty"`
 	DraftData        map[string]any `json:"draft_data" bson:"draft_data"`
 	PublishedData    map[string]any `json:"published_data,omitempty" bson:"published_data,omitempty"`

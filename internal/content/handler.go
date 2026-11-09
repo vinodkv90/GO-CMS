@@ -230,6 +230,11 @@ func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Unwrap nested "data" wrapper if provided (e.g. Strapi or REST client format)
+	if inner, ok := data["data"].(map[string]any); ok {
+		data = inner
+	}
+
 	entry, err := h.svc.CreateEntry(r.Context(), uid, data, user.ID)
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

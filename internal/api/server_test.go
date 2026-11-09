@@ -253,7 +253,21 @@ func TestProductionCapabilitiesIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(bodyBytes), "cms_http_requests_total")
 
-	// Test 4: Clean shutdown
+	// Test 4: GET /docs (Interactive Swagger documentation viewer)
+	reqDocs := httptest.NewRequest("GET", "/docs", nil)
+	wDocs := httptest.NewRecorder()
+	srv.Router().ServeHTTP(wDocs, reqDocs)
+	assert.Equal(t, http.StatusOK, wDocs.Code)
+	docsBody, _ := io.ReadAll(wDocs.Body)
+	assert.Contains(t, string(docsBody), "Go CMS - API Documentation")
+
+	// Test 5: GET /api/v1/openapi.yaml (Raw OpenAPI spec)
+	reqSpec := httptest.NewRequest("GET", "/api/v1/openapi.yaml", nil)
+	wSpec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(wSpec, reqSpec)
+	assert.Equal(t, http.StatusOK, wSpec.Code)
+
+	// Test 6: Clean shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	err = srv.Shutdown(ctx)

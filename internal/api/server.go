@@ -146,14 +146,16 @@ func NewServer(
 		})
 	}
 
-	// 6. Mount Metrics, Health, Info, and API routes
+	// 6. Mount Metrics, Documentation, Health, Info, and API routes
 	r.Handle("/metrics", metricsRegistry.Handler())
+	r.Get("/docs", DocsHandler)
 	r.Get("/healthz", HealthHandler)
 	r.Get("/readyz", ReadinessHandler(db))
 	r.Get("/info", InfoHandler(cfg, db))
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/ping", PingHandler)
+		api.Get("/openapi.yaml", OpenAPIHandler)
 
 		if authSvc != nil {
 			authHandler := auth.NewHandler(authSvc)

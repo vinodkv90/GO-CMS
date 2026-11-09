@@ -69,14 +69,21 @@ func (idx *Indexer) IndexEntry(entry *content.ContentEntry) {
 	}
 	body := strings.Join(bodyParts, " ")
 
+	docType := entry.ContentTypeUID
+	if docType == "" {
+		docType = entry.ContentTypeID
+	}
+
 	doc := Document{
 		ID:    entry.ID,
-		Type:  entry.ContentTypeID,
+		Type:  docType,
 		Title: title,
 		Body:  body,
 		Metadata: map[string]any{
-			"slug":   entry.Slug,
-			"status": string(entry.Status),
+			"slug":             entry.Slug,
+			"status":           string(entry.Status),
+			"content_type_id":  entry.ContentTypeID,
+			"content_type_uid": entry.ContentTypeUID,
 		},
 	}
 

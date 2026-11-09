@@ -1,4 +1,4 @@
-.PHONY: all build build-admin test test-coverage lint run migrate-up migrate-status docker-up docker-down clean
+.PHONY: all build build-admin test test-coverage lint run migrate-up migrate-status docker-up docker-down backup restore clean
 
 all: build-admin build test
 
@@ -44,6 +44,14 @@ docker-up:
 # Stop all containers
 docker-down:
 	docker compose down
+
+# Create full backup of database and media assets
+backup:
+	@bash ./scripts/backup.sh ./backups
+
+# Restore from backup archive (specify ARCHIVE=...)
+restore:
+	@bash ./scripts/restore.sh $(ARCHIVE)
 
 # Clean build artifacts
 clean:

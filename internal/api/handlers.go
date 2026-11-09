@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-cms/cms/internal/config"
@@ -99,6 +100,62 @@ func PingHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{
 		"message": "pong",
 	})
+}
+
+// findOpenAPISpec locates the openapi.yaml specification file.
+func findOpenAPISpec() string {
+	candidates := []string{
+		"docs/openapi.yaml",
+		"../docs/openapi.yaml",
+		"../../docs/openapi.yaml",
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return "docs/openapi.yaml"
+}
+
+// OpenAPIHandler serves the raw OpenAPI 3.0 specification.
+func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
+	path := findOpenAPISpec()
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	http.ServeFile(w, r, path)
+}
+
+// DocsHandler serves interactive API documentation using Swagger UI.
+func DocsHandler(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Go CMS - API Documentation</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      window.ui = SwaggerUIBundle({
+        url: '/api/v1/openapi.yaml',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset
+        ],
+        layout: "BaseLayout"
+      });
+    };
+  </script>
+</body>
+</html>`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(html))
 }
 
 func respondJSON(w http.ResponseWriter, status int, data any) {
