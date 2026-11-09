@@ -63,3 +63,4 @@ func main() {
 	fmt.Printf("  New Password: %s\n", *newPassword)
 	fmt.Printf("  Rows Affected: %d\n", rows)
 }
+
