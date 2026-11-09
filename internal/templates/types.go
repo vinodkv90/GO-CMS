@@ -55,4 +55,3 @@ type TemplateData struct {
 	Preview     bool
 	GeneratedAt time.Time
 }
-

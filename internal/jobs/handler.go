@@ -99,4 +99,3 @@ func (h *HTTPHandler) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 		"data":    job,
 	})
 }
-

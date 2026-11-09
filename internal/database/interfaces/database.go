@@ -32,4 +32,3 @@ type MongoDatabase interface {
 	Database() *mongo.Database
 	Collection(name string) *mongo.Collection
 }
-

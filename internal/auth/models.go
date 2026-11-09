@@ -22,8 +22,8 @@ const (
 // Permission represents a granular action permitted on a resource.
 type Permission struct {
 	ID          string    `json:"id" bson:"_id"`
-	Action      string    `json:"action" bson:"action"`         // e.g. "create", "read", "update", "delete", "publish", "*"
-	Resource    string    `json:"resource" bson:"resource"`     // e.g. "content", "media", "users", "roles", "settings", "*"
+	Action      string    `json:"action" bson:"action"`     // e.g. "create", "read", "update", "delete", "publish", "*"
+	Resource    string    `json:"resource" bson:"resource"` // e.g. "content", "media", "users", "roles", "settings", "*"
 	Description string    `json:"description" bson:"description"`
 	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
 }
@@ -64,4 +64,3 @@ type APIToken struct {
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty" bson:"last_used_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at" bson:"created_at"`
 }
-

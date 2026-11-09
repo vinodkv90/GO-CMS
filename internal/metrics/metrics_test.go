@@ -82,4 +82,3 @@ func TestMetricsRegistry_HTTPMiddlewareAndHandler(t *testing.T) {
 	assert.Contains(t, body, "cms_db_in_use_connections 3")
 	assert.Contains(t, body, "cms_jobs_queue_depth 5")
 }
-

@@ -58,4 +58,3 @@ func TestMySQL_CustomURI(t *testing.T) {
 
 	assert.Equal(t, "mysql", db.DriverName())
 }
-

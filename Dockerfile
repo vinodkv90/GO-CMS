@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /bin/cms-migrate ./cmd/migrate
 
 # Stage 3: Minimal hardened runtime image
-FROM alpine:3.20
+FROM alpine:3.21
 RUN addgroup -g 10001 -S appgroup && \
     adduser -u 10001 -S appuser -G appgroup
 RUN apk add --no-cache ca-certificates tzdata
@@ -37,10 +37,11 @@ COPY --from=go-builder /bin/cms-migrate /app/cms-migrate
 # Copy compiled React admin SPA
 COPY --from=admin-builder /app/admin/dist /app/admin/dist
 
-# Copy configuration, default themes, and plugins
+# Copy configuration, default themes, plugins, and OpenAPI specs
 COPY --chown=appuser:appgroup config.example.yaml /app/config.yaml
 COPY --chown=appuser:appgroup themes /app/themes
 COPY --chown=appuser:appgroup plugins /app/plugins
+COPY --chown=appuser:appgroup docs/openapi.yaml /app/docs/openapi.yaml
 RUN mkdir -p /app/uploads && chown -R appuser:appgroup /app
 
 USER appuser

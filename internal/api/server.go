@@ -45,6 +45,7 @@ type Server struct {
 	metricsRegistry *metrics.Registry
 	auditSvc        *audit.Service
 	tenancySvc      *tenancy.Service
+	rateLimiter     *IPRateLimiter
 	logger          *slog.Logger
 	router          *chi.Mux
 	httpServer      *http.Server
@@ -69,6 +70,11 @@ func NewServer(
 	r.Use(StructuredLoggerMiddleware(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeadersMiddleware)
+	r.Use(MaxBodySizeMiddleware(32 << 20)) // 32MB max request body ceiling
+
+	// Rate Limiting (50 req/sec, burst 100)
+	rateLimiter := NewIPRateLimiter(50.0, 100)
+	r.Use(rateLimiter.Middleware)
 
 	// 2. Metrics & Observability Middleware
 	metricsRegistry := metrics.NewRegistry()
@@ -236,6 +242,7 @@ func NewServer(
 		metricsRegistry: metricsRegistry,
 		auditSvc:        auditSvc,
 		tenancySvc:      tenancySvc,
+		rateLimiter:     rateLimiter,
 		logger:          logger,
 		router:          r,
 		httpServer:      httpSrv,
@@ -270,6 +277,9 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down CMS HTTP server...")
 
+	if s.rateLimiter != nil {
+		s.rateLimiter.Close()
+	}
 	if s.workerPool != nil {
 		_ = s.workerPool.Stop(ctx)
 	}
@@ -361,4 +371,3 @@ func mountAdminSPA(r chi.Router) {
 		http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
 	})
 }
-

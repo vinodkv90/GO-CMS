@@ -156,7 +156,7 @@ func (e *Engine) Search(query string, typeFilter string, limit int) []SearchResu
 		for indexToken, docMap := range e.postings {
 			if indexToken != token && strings.HasPrefix(indexToken, token) {
 				docFreq := float64(len(docMap))
-				idf := math.Log(1.0 + (totalDocs / docFreq)) * 0.5 // partial match discount
+				idf := math.Log(1.0+(totalDocs/docFreq)) * 0.5 // partial match discount
 
 				for docID, tf := range docMap {
 					scores[docID] += tf * idf
@@ -236,4 +236,3 @@ func (e *Engine) Clear() {
 	e.postings = make(map[string]map[string]float64)
 	e.docCounts = make(map[string]int)
 }
-

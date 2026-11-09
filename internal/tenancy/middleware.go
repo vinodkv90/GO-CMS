@@ -49,9 +49,16 @@ func Middleware(svc *Service) func(http.Handler) http.Handler {
 				tenant = svc.DefaultTenant()
 			}
 
+			// 5. Guard against suspended tenant access
+			if tenant != nil && tenant.Status == StatusSuspended {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"tenant workspace is suspended"}`))
+				return
+			}
+
 			ctx := WithTenant(r.Context(), tenant)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
-

@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # Go CMS - Automated Disaster Recovery & Restore Script (PowerShell)
 # ==============================================================================
 # Verifies SHA256 integrity, extracts archive, and restores database and uploads.
@@ -97,3 +97,4 @@ finally {
         Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+

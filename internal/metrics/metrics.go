@@ -191,4 +191,3 @@ func (r *Registry) HTTPMiddleware(next http.Handler) http.Handler {
 		r.HTTPRequestDuration.WithLabelValues(req.Method, pattern, statusStr).Observe(duration)
 	})
 }
-

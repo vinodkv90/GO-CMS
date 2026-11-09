@@ -181,3 +181,27 @@ func TestHTTPHandler_Endpoints(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestMiddleware_SuspendedTenantBlocked(t *testing.T) {
+	svc := NewService()
+	ctx := context.Background()
+
+	suspended, err := svc.Create(ctx, Tenant{
+		Name:   "Suspended Org",
+		Slug:   "suspended-org",
+		Status: StatusSuspended,
+	})
+	require.NoError(t, err)
+
+	mw := Middleware(svc)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api/v1/content", nil)
+	req.Header.Set("X-Tenant-ID", suspended.Slug)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "tenant workspace is suspended")
+}

@@ -47,4 +47,3 @@ func (m MediaMetadata) MetadataJSON() string {
 	}
 	return string(b)
 }
-

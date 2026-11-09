@@ -49,4 +49,3 @@ func New(cfg config.CacheConfig) (Cache, error) {
 		return nil, fmt.Errorf("cache: unsupported cache driver %q (supported: memory, redis)", cfg.Driver)
 	}
 }
-

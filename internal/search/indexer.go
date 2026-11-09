@@ -106,4 +106,3 @@ func extractString(m map[string]any, keys ...string) string {
 func (idx *Indexer) Engine() *Engine {
 	return idx.engine
 }
-

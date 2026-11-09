@@ -53,4 +53,3 @@ func TestValidatePasswordStrength(t *testing.T) {
 	// Missing digit
 	assert.Error(t, ValidatePasswordStrength("PasswordOnly!"))
 }
-

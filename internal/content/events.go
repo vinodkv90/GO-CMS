@@ -57,4 +57,3 @@ func (b *EventBus) Emit(ctx context.Context, event LifecycleEvent, entry *Conten
 	}
 	return nil
 }
-

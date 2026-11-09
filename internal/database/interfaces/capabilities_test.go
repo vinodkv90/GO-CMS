@@ -26,4 +26,3 @@ func TestCapabilitySet(t *testing.T) {
 	assert.False(t, nilSet.Has(CapTransactions))
 	assert.Nil(t, nilSet.All())
 }
-

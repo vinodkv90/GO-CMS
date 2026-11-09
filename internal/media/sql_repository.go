@@ -279,4 +279,3 @@ func (r *SQLRepository) scanRow(row *sql.Row) (*MediaAsset, error) {
 
 	return &a, nil
 }
-

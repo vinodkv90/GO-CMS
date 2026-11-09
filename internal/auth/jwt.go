@@ -109,4 +109,3 @@ func HashAPIToken(rawToken string) string {
 func IsAPIToken(token string) bool {
 	return strings.HasPrefix(strings.TrimSpace(token), APITokenPrefix)
 }
-

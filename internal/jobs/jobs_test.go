@@ -189,3 +189,36 @@ func TestHTTPHandler_Endpoints(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestWorkerPool_PanicRecovery(t *testing.T) {
+	q := NewQueue()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := NewWorkerPool(q, 1, 10*time.Millisecond, logger)
+
+	pool.RegisterHandler("test:panic", func(ctx context.Context, job *Job) error {
+		panic("simulated fatal nil pointer dereference")
+	})
+
+	pool.Start()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_ = pool.Stop(ctx)
+	}()
+
+	job, err := NewJob("test:panic", nil, time.Time{}, 1)
+	require.NoError(t, err)
+
+	err = q.Enqueue(job)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		stored, ok := q.Get(job.ID)
+		return ok && stored.Status == StatusFailed
+	}, 1*time.Second, 20*time.Millisecond)
+
+	stored, ok := q.Get(job.ID)
+	require.True(t, ok)
+	assert.Equal(t, StatusFailed, stored.Status)
+	assert.Contains(t, stored.Error, "panic executing job: simulated fatal nil pointer dereference")
+}

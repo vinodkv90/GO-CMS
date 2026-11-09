@@ -200,4 +200,3 @@ func (c *MemoryCache) evictExpired(now time.Time) {
 		}
 	}
 }
-

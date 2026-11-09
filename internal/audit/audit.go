@@ -149,4 +149,3 @@ func (s *Service) Record(ctx context.Context, params RecordParams) (*AuditLog, e
 func (s *Service) List(ctx context.Context, filter Filter) ([]*AuditLog, int, error) {
 	return s.repo.List(ctx, filter)
 }
-

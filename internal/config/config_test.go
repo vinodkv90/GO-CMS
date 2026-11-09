@@ -90,4 +90,3 @@ func TestConfigValidation(t *testing.T) {
 	cfg.Auth.SessionSecret = "very-strong-production-session-secret-key-67890"
 	assert.NoError(t, cfg.Validate())
 }
-

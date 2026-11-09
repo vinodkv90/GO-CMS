@@ -70,4 +70,3 @@ func NewJob(jobType string, payload any, runAt time.Time, maxRetries int) (*Job,
 
 // Handler defines the function signature for executing a background job.
 type Handler func(ctx context.Context, job *Job) error
-

@@ -134,10 +134,25 @@ func (wp *WorkerPool) processNextJob(workerID int) {
 	job.Attempts++
 	wp.logger.Debug("Worker executing job", "worker_id", workerID, "job_id", job.ID, "type", job.Type, "attempt", job.Attempts)
 
-	// Execute with timeout
+	// Execute with timeout and panic recovery
 	jobCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	execErr := handler(jobCtx, job)
-	cancel()
+	defer cancel()
+
+	var execErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				execErr = fmt.Errorf("panic executing job: %v", r)
+				wp.logger.Error("Recovered from panic during job execution",
+					"job_id", job.ID,
+					"type", job.Type,
+					"worker_id", workerID,
+					"panic", fmt.Sprintf("%v", r),
+				)
+			}
+		}()
+		execErr = handler(jobCtx, job)
+	}()
 
 	now := time.Now().UTC()
 	if execErr == nil {
@@ -182,4 +197,3 @@ func (wp *WorkerPool) processNextJob(workerID int) {
 func (wp *WorkerPool) Queue() *Queue {
 	return wp.queue
 }
-

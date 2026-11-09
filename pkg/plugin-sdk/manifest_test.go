@@ -52,4 +52,3 @@ func TestParseManifest(t *testing.T) {
 	_, err = pluginsdk.ParseManifest([]byte(`{not-json}`))
 	assert.ErrorIs(t, err, pluginsdk.ErrInvalidManifest)
 }
-

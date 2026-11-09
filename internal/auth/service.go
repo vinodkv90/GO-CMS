@@ -394,4 +394,3 @@ func (s *Service) ListAPITokens(ctx context.Context, userID string) ([]*APIToken
 func (s *Service) RevokeAPIToken(ctx context.Context, tokenID, userID string) error {
 	return s.tokenRepo.DeleteToken(ctx, tokenID, userID)
 }
-

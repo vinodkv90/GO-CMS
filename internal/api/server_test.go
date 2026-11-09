@@ -273,5 +273,3 @@ func TestProductionCapabilitiesIntegration(t *testing.T) {
 	err = srv.Shutdown(ctx)
 	assert.NoError(t, err)
 }
-
-

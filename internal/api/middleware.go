@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -17,8 +18,28 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self';")
+		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// MaxBodySizeMiddleware rejects requests exceeding maxBytes to prevent memory exhaustion DoS.
+func MaxBodySizeMiddleware(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ContentLength > maxBytes {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "request body entity too large",
+				})
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // StructuredLoggerMiddleware logs every HTTP request using slog with context attributes.
@@ -65,4 +86,3 @@ func StructuredLoggerMiddleware(logger *slog.Logger) func(next http.Handler) htt
 		})
 	}
 }
-

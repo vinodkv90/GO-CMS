@@ -63,4 +63,3 @@ func TestMongoDB_DirectURI(t *testing.T) {
 	assert.Equal(t, "mongodb", db.DriverName())
 	assert.Equal(t, "direct_cms", db.Database().Name())
 }
-

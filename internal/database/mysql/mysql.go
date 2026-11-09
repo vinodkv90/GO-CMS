@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/database/interfaces"
@@ -34,18 +35,30 @@ func NewMySQL(ctx context.Context, cfg config.DatabaseConfig) (*MySQLDB, error) 
 		return nil, fmt.Errorf("failed to open mysql database: %w", err)
 	}
 
-	if cfg.MaxOpenConns > 0 {
-		db.SetMaxOpenConns(cfg.MaxOpenConns)
+	// Apply production connection pooling options
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 25
 	}
-	if cfg.MaxIdleConns > 0 {
-		db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetMaxOpenConns(maxOpen)
+
+	maxIdle := cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 10
 	}
-	if cfg.ConnMaxLifetime > 0 {
-		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetMaxIdleConns(maxIdle)
+
+	connMaxLifetime := cfg.ConnMaxLifetime
+	if connMaxLifetime <= 0 {
+		connMaxLifetime = 15 * time.Minute
 	}
-	if cfg.ConnMaxIdleTime > 0 {
-		db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	db.SetConnMaxLifetime(connMaxLifetime)
+
+	connMaxIdleTime := cfg.ConnMaxIdleTime
+	if connMaxIdleTime <= 0 {
+		connMaxIdleTime = 5 * time.Minute
 	}
+	db.SetConnMaxIdleTime(connMaxIdleTime)
 
 	// MySQL does NOT support transactional DDL (implicit commits occur on DDL)
 	caps := interfaces.NewCapabilitySet(
@@ -109,4 +122,3 @@ func (m *MySQLDB) QueryRowContext(ctx context.Context, query string, args ...any
 func (m *MySQLDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return m.db.BeginTx(ctx, opts)
 }
-

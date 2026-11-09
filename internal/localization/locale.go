@@ -201,4 +201,3 @@ func (s *Service) ResolveLocalizedData(data map[string]any, targetLocale string)
 
 	return result
 }
-

@@ -127,3 +127,56 @@ func TestManager_Lifecycle(t *testing.T) {
 	err = mgr.Disable(ctx, "test-plugin")
 	assert.ErrorIs(t, err, plugins.ErrPluginNotEnabled)
 }
+
+type faultyPlugin struct {
+	pluginsdk.BasePlugin
+}
+
+func (f *faultyPlugin) Manifest() pluginsdk.Manifest {
+	return pluginsdk.Manifest{
+		ID:      "faulty-plugin",
+		Name:    "Faulty Plugin",
+		Version: "1.0.0",
+	}
+}
+
+func (f *faultyPlugin) Init(ctx context.Context, host pluginsdk.Host) error {
+	return nil
+}
+
+func (f *faultyPlugin) Start(ctx context.Context) error {
+	return assert.AnError
+}
+
+func (f *faultyPlugin) Stop(ctx context.Context) error {
+	return nil
+}
+
+func TestManager_FailureScenarios(t *testing.T) {
+	tempDir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := plugins.NewManager(tempDir, nil, nil, nil, logger)
+	ctx := context.Background()
+
+	// 1. Enable non-existent plugin
+	err := mgr.Enable(ctx, "non-existent")
+	assert.ErrorIs(t, err, plugins.ErrPluginNotFound)
+
+	// 2. Disable non-existent plugin
+	err = mgr.Disable(ctx, "non-existent")
+	assert.ErrorIs(t, err, plugins.ErrPluginNotFound)
+
+	// 3. Register faulty plugin whose Start() fails
+	faulty := &faultyPlugin{}
+	err = mgr.RegisterNative(faulty)
+	require.NoError(t, err)
+
+	err = mgr.Enable(ctx, "faulty-plugin")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to start plugin")
+
+	entity, err := mgr.Get("faulty-plugin")
+	require.NoError(t, err)
+	assert.Equal(t, plugins.StatusError, entity.Status)
+	assert.Contains(t, entity.ErrorMsg, "start failure")
+}

@@ -163,4 +163,3 @@ func respondJSON(w http.ResponseWriter, status int, data any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
-

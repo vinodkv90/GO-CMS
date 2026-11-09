@@ -141,4 +141,3 @@ func (r *RedisCache) Clear(ctx context.Context) error {
 func (r *RedisCache) Close() error {
 	return r.client.Close()
 }
-

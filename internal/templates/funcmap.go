@@ -180,4 +180,3 @@ func SafeFuncMap(activeThemeSlug string) template.FuncMap {
 		},
 	}
 }
-

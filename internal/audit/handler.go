@@ -62,4 +62,3 @@ func (h *HTTPHandler) handleListAuditLogs(w http.ResponseWriter, r *http.Request
 		},
 	})
 }
-

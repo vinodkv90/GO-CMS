@@ -47,4 +47,3 @@ func GetTenant(ctx context.Context) *Tenant {
 func WithTenant(ctx context.Context, tenant *Tenant) context.Context {
 	return context.WithValue(ctx, TenantContextKey, tenant)
 }
-

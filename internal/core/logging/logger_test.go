@@ -70,4 +70,3 @@ func TestParseLevel(t *testing.T) {
 		assert.Equal(t, tt.expected, strings.ToUpper(lvl.String()))
 	}
 }
-

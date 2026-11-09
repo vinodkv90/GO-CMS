@@ -74,7 +74,7 @@ func TestURLSigner_VerifyPath(t *testing.T) {
 	var expInt int64
 	if err != nil {
 		var parseErr error
-		expInt, parseErr = time.Now().Add(10 * time.Minute).Unix(), nil
+		expInt, parseErr = time.Now().Add(10*time.Minute).Unix(), nil
 		require.NoError(t, parseErr)
 	} else {
 		expInt = expires.Unix()

@@ -117,4 +117,3 @@ func TestHTTPHandler_AuditLogsEndpoint(t *testing.T) {
 	meta := resp["meta"].(map[string]any)
 	assert.Equal(t, float64(1), meta["total"])
 }
-

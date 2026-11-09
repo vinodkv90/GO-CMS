@@ -85,4 +85,3 @@ func TestMongoDBCapabilities(t *testing.T) {
 	assert.True(t, caps.Has("full_text_search"))
 	assert.False(t, caps.Has("foreign_keys"))
 }
-

@@ -136,4 +136,3 @@ func TestHTTPHandler_SearchEndpoint(t *testing.T) {
 	assert.Equal(t, "architectures", meta["query"])
 	assert.Equal(t, float64(1), meta["total"])
 }
-

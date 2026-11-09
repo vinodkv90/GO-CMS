@@ -121,3 +121,4 @@ if [ -f "${BACKUP_DIR}/${TARGET_BACKUP_NAME}.tar.gz.sha256" ]; then
   echo " Checksum: $(cat "${BACKUP_DIR}/${TARGET_BACKUP_NAME}.tar.gz.sha256")"
 fi
 echo "========================================================"
+

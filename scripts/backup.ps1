@@ -98,3 +98,4 @@ Write-Host " Backup successfully created:" -ForegroundColor Green
 Write-Host " Archive:  $zipPath"
 Write-Host " SHA-256:  $hash"
 Write-Host "========================================================" -ForegroundColor Cyan
+

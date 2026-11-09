@@ -35,4 +35,3 @@ type Host interface {
 	// RecordAuditLog records a structured audit event into the CMS audit store.
 	RecordAuditLog(ctx context.Context, action string, resourceType string, resourceID string, metadata map[string]any)
 }
-

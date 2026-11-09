@@ -150,6 +150,30 @@ func TestMediaService_SignedURLs(t *testing.T) {
 	assert.Contains(t, customSignedURL, "expires=")
 }
 
+func TestMediaService_PathTraversalAndEmptyUpload(t *testing.T) {
+	svc, _, storageProvider, _ := setupTestMediaService(t, false)
+	ctx := context.Background()
+
+	// 1. Empty upload rejected
+	_, err := svc.Upload(ctx, bytes.NewReader([]byte{}), "empty.txt", 0, "", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "uploaded file is empty")
+
+	// 2. Traversal attempt sanitized
+	pngData := createTestPNG(20, 20)
+	asset, err := svc.Upload(ctx, bytes.NewReader(pngData), "../../../../etc/shadow.png", int64(len(pngData)), "", "")
+	require.NoError(t, err)
+
+	// Filename should not contain traversal
+	assert.NotContains(t, asset.Filename, "..")
+	assert.NotContains(t, asset.StorageKey, "..")
+
+	// File exists within storage provider base directory
+	exists, err := storageProvider.Exists(ctx, asset.StorageKey)
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
 func stringsLastIndex(s, sep string) int {
 	for i := len(s) - len(sep); i >= 0; i-- {
 		if s[i:i+len(sep)] == sep {
@@ -158,4 +182,3 @@ func stringsLastIndex(s, sep string) int {
 	}
 	return -1
 }
-

@@ -96,4 +96,3 @@ func (p *Plugin) Init(ctx context.Context, host pluginsdk.Host) error {
 
 	return nil
 }
-

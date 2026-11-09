@@ -96,4 +96,3 @@ type EntryFilter struct {
 	Limit     int
 	Offset    int
 }
-

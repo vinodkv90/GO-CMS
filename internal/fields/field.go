@@ -55,7 +55,7 @@ type FieldDefinition struct {
 	Default     any             `json:"default,omitempty"`
 	Rules       ValidationRules `json:"rules"`
 	ReadOnly    bool            `json:"read_only"`
-	Private     bool            `json:"private"`   // Excluded from unauthenticated or public API responses
+	Private     bool            `json:"private"`               // Excluded from unauthenticated or public API responses
 	TargetType  string          `json:"target_type,omitempty"` // For relations or components (slug of target)
 }
 
@@ -267,4 +267,3 @@ func (r *Registry) Register(ft FieldType) error {
 func (r *Registry) IsValid(ft FieldType) bool {
 	return r.types[ft]
 }
-

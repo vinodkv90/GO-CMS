@@ -99,4 +99,3 @@ func printUsage() {
 	fmt.Println("\nOptions:")
 	fmt.Println("  -config <path>   Path to config.yaml")
 }
-

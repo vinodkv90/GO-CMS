@@ -143,3 +143,60 @@ func TestHandler_APITokenFlow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandler_SecurityAndRBACEnforcement(t *testing.T) {
+	svc, _ := setupTestAuthService(t)
+	router := setupTestRouter(svc)
+
+	// Seed roles & admin
+	admin, err := svc.SeedDefaultRolesAndAdmin(t.Context(), "admin", "admin@cms.test", "Admin@CMS2026!")
+	require.NoError(t, err)
+
+	_, adminToken, err := svc.Authenticate(t.Context(), "admin", "Admin@CMS2026!")
+	require.NoError(t, err)
+
+	// Register regular non-admin user
+	nonAdmin, err := svc.Register(t.Context(), RegisterRequest{
+		Username: "regularuser",
+		Email:    "reg@example.com",
+		Password: "RegUser2026!",
+	})
+	require.NoError(t, err)
+
+	_, regToken, err := svc.Authenticate(t.Context(), "regularuser", "RegUser2026!")
+	require.NoError(t, err)
+
+	// 1. Regular user attempting to access admin-only /users endpoint (Forbidden 403)
+	req := httptest.NewRequest("GET", "/users", nil)
+	req.Header.Set("Authorization", "Bearer "+regToken)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "Forbidden: insufficient permissions")
+
+	// 2. Admin user accessing /users endpoint (OK 200)
+	reqAdmin := httptest.NewRequest("GET", "/users", nil)
+	reqAdmin.Header.Set("Authorization", "Bearer "+adminToken)
+	wAdmin := httptest.NewRecorder()
+	router.ServeHTTP(wAdmin, reqAdmin)
+	assert.Equal(t, http.StatusOK, wAdmin.Code)
+
+	// 3. Tampered token (header/signature modified)
+	tamperedToken := adminToken[:len(adminToken)-5] + "XXXXX"
+	reqTampered := httptest.NewRequest("GET", "/auth/me", nil)
+	reqTampered.Header.Set("Authorization", "Bearer "+tamperedToken)
+	wTampered := httptest.NewRecorder()
+	router.ServeHTTP(wTampered, reqTampered)
+	assert.Equal(t, http.StatusUnauthorized, wTampered.Code)
+
+	// 4. Malformed Authorization headers
+	for _, badHeader := range []string{"Bearer", "Basic xyz", "Bearer   ", "InvalidPrefix token"} {
+		reqBad := httptest.NewRequest("GET", "/auth/me", nil)
+		reqBad.Header.Set("Authorization", badHeader)
+		wBad := httptest.NewRecorder()
+		router.ServeHTTP(wBad, reqBad)
+		assert.Equal(t, http.StatusUnauthorized, wBad.Code, "header %q should be unauthorized", badHeader)
+	}
+
+	_ = admin
+	_ = nonAdmin
+}

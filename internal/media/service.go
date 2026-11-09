@@ -240,4 +240,3 @@ func (s *Service) ResolveURL(ctx context.Context, storageKey string) (string, er
 
 	return rawURL, nil
 }
-

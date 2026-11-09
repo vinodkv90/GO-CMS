@@ -45,4 +45,3 @@ func (h *HTTPHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-

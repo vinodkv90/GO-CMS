@@ -26,4 +26,3 @@ type PluginEntity struct {
 	EnabledAt *time.Time         `json:"enabled_at,omitempty"`
 	ErrorMsg  string             `json:"error_msg,omitempty"`
 }
-

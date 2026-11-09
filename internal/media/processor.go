@@ -177,4 +177,3 @@ func GenerateThumbnail(srcReader io.Reader, maxDim int) ([]byte, int, int, error
 
 	return buf.Bytes(), thumbW, thumbH, nil
 }
-

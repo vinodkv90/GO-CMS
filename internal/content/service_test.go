@@ -175,3 +175,38 @@ func TestService_SingleTypeSingletonEnforcement(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSingletonExists)
 }
 
+func TestService_ValidationAndFailureScenarios(t *testing.T) {
+	svc, _ := setupTestContentService(t)
+	ctx := context.Background()
+
+	// 1. Query non-existent content type
+	_, err := svc.GetContentType(ctx, "ghost_type")
+	assert.ErrorIs(t, err, ErrContentTypeNotFound)
+
+	// 2. Create entry for non-existent content type
+	_, err = svc.CreateEntry(ctx, "ghost_type", map[string]any{"title": "test"}, "user-1")
+	assert.ErrorIs(t, err, ErrContentTypeNotFound)
+
+	// 3. Create content type with required field
+	_, err = svc.CreateContentType(ctx, CreateTypeRequest{
+		UID:  "products",
+		Name: "Products",
+		Kind: KindCollection,
+		Fields: []ContentField{
+			{Name: "SKU", FieldKey: "sku", FieldType: fields.TypeShortText, Configuration: fields.ValidationRules{Required: true}},
+			{Name: "Price", FieldKey: "price", FieldType: fields.TypeNumber, Configuration: fields.ValidationRules{Required: true}},
+		},
+	})
+	require.NoError(t, err)
+
+	// 4. Create entry missing required field fails validation
+	_, err = svc.CreateEntry(ctx, "products", map[string]any{
+		"price": 100,
+	}, "user-1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "required")
+
+	// 5. Delete non-existent entry returns ErrEntryNotFound
+	err = svc.DeleteEntry(ctx, "products", "non-existent-id", false, "user-1")
+	assert.ErrorIs(t, err, ErrEntryNotFound)
+}

@@ -114,4 +114,3 @@ func (m *MongoDB) Database() *mongo.Database {
 func (m *MongoDB) Collection(name string) *mongo.Collection {
 	return m.db.Collection(name)
 }
-

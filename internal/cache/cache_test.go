@@ -125,4 +125,3 @@ func TestCacheFactory(t *testing.T) {
 	_, err = New(cfgRedisNoURL)
 	assert.ErrorContains(t, err, "redis_url cannot be empty")
 }
-

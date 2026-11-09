@@ -82,4 +82,3 @@ func (p *Provider) URL(ctx context.Context, key string) (string, error) {
 	cleanKey := strings.TrimPrefix(key, "/")
 	return fmt.Sprintf("%s/%s", p.baseURL, cleanKey), nil
 }
-

@@ -100,4 +100,3 @@ func TestGenerateThumbnail(t *testing.T) {
 	assert.Equal(t, th, cfg.Height)
 	assert.Equal(t, "png", format)
 }
-
