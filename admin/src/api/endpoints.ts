@@ -10,8 +10,12 @@ import type {
 } from '../types';
 
 export const authApi = {
-  login: (credentials: { username: string; password: string }) =>
-    api.post<{ token: string; user: User }>('/auth/login', credentials),
+  login: (credentials: { username: string; password: string; identifier?: string }) =>
+    api.post<{ token: string; user: User }>('/auth/login', {
+      identifier: credentials.username,
+      username: credentials.username,
+      password: credentials.password,
+    }),
 
   me: () => api.get<{ data: User }>('/auth/me'),
 
