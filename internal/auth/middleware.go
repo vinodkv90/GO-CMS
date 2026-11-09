@@ -213,11 +213,19 @@ func ClearAuthCookie(w http.ResponseWriter) {
 
 // CSRFMiddleware protects cookie-authenticated state-changing requests with a
 // double-submit token. Bearer-token requests are not vulnerable to browser
-// cookie CSRF and are left unchanged.
+// cookie CSRF and are left unchanged. Public authentication endpoints (login,
+// register, logout) do not require prior CSRF validation.
 func CSRFMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions &&
 			r.Header.Get("Authorization") == "" {
+			// Skip CSRF validation for unauthenticated auth endpoints (login, register, logout)
+			path := r.URL.Path
+			if strings.HasSuffix(path, "/auth/login") || strings.HasSuffix(path, "/auth/register") || strings.HasSuffix(path, "/auth/logout") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			if _, err := r.Cookie(SessionCookieName); err == nil {
 				cookie, cookieErr := r.Cookie(CSRFCookieName)
 				header := r.Header.Get("X-CSRF-Token")
