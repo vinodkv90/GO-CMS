@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/database/interfaces"
@@ -208,4 +209,43 @@ func TestAdminSPARoutes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(bodyBytes3), "Go CMS - Admin Console")
 }
+
+func TestProductionCapabilitiesIntegration(t *testing.T) {
+	cfg := config.DefaultConfig()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	db := &mockHealthDB{driver: "postgres"}
+
+	srv := NewServer(cfg, db, nil, nil, nil, nil, nil, logger)
+
+	// Verify modules initialized
+	assert.NotNil(t, srv.Cache())
+	assert.NotNil(t, srv.Jobs())
+	assert.NotNil(t, srv.Localization())
+	assert.NotNil(t, srv.Search())
+
+	// Test 1: GET /api/v1/locales
+	req1 := httptest.NewRequest("GET", "/api/v1/locales", nil)
+	w1 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	var locResp map[string]any
+	err := json.Unmarshal(w1.Body.Bytes(), &locResp)
+	require.NoError(t, err)
+	data := locResp["data"].([]any)
+	assert.GreaterOrEqual(t, len(data), 1)
+
+	// Test 2: GET /api/v1/search?q=hello
+	req2 := httptest.NewRequest("GET", "/api/v1/search?q=hello", nil)
+	w2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusOK, w2.Code)
+
+	// Test 3: Clean shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = srv.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
 

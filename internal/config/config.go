@@ -74,6 +74,22 @@ type PluginsConfig struct {
 	PluginsDir string `yaml:"plugins_dir"`
 }
 
+// CacheConfig defines caching layer settings.
+type CacheConfig struct {
+	Driver     string        `yaml:"driver"` // "memory", "redis"
+	RedisURL   string        `yaml:"redis_url"`
+	DefaultTTL time.Duration `yaml:"default_ttl"`
+	Prefix     string        `yaml:"prefix"`
+}
+
+// JobsConfig defines background job processing settings.
+type JobsConfig struct {
+	Enabled      bool          `yaml:"enabled"`
+	Concurrency  int           `yaml:"concurrency"`
+	MaxRetries   int           `yaml:"max_retries"`
+	PollInterval time.Duration `yaml:"poll_interval"`
+}
+
 // Config is the root configuration structure.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
@@ -83,6 +99,8 @@ type Config struct {
 	Media    MediaConfig    `yaml:"media"`
 	Themes   ThemesConfig   `yaml:"themes"`
 	Plugins  PluginsConfig  `yaml:"plugins"`
+	Cache    CacheConfig    `yaml:"cache"`
+	Jobs     JobsConfig     `yaml:"jobs"`
 }
 
 // DefaultConfig returns safe and reasonable default configuration values.
@@ -138,6 +156,18 @@ func DefaultConfig() *Config {
 		},
 		Plugins: PluginsConfig{
 			PluginsDir: "./plugins",
+		},
+		Cache: CacheConfig{
+			Driver:     "memory",
+			RedisURL:   "redis://localhost:6379/0",
+			DefaultTTL: 5 * time.Minute,
+			Prefix:     "cms:",
+		},
+		Jobs: JobsConfig{
+			Enabled:      true,
+			Concurrency:  4,
+			MaxRetries:   3,
+			PollInterval: 1 * time.Second,
 		},
 	}
 }
@@ -234,6 +264,21 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("CMS_MEDIA_SIGNED_SECRET"); val != "" {
 		cfg.Media.SignedURLs.SecretKey = val
+	}
+
+	if val := os.Getenv("CMS_CACHE_DRIVER"); val != "" {
+		cfg.Cache.Driver = strings.ToLower(val)
+	}
+	if val := os.Getenv("CMS_CACHE_REDIS_URL"); val != "" {
+		cfg.Cache.RedisURL = val
+	}
+	if val := os.Getenv("CMS_JOBS_ENABLED"); val != "" {
+		cfg.Jobs.Enabled = strings.ToLower(val) == "true" || val == "1"
+	}
+	if val := os.Getenv("CMS_JOBS_CONCURRENCY"); val != "" {
+		if c, err := strconv.Atoi(val); err == nil {
+			cfg.Jobs.Concurrency = c
+		}
 	}
 }
 
