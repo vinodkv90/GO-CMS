@@ -41,6 +41,7 @@ export type FieldType =
   | 'relation_multiple'
   | 'component'
   | 'repeatable_component'
+  | 'dynamic_zone'
   | 'uid';
 
 export interface ValidationRules {
@@ -52,6 +53,16 @@ export interface ValidationRules {
   max?: number;
   regex?: string;
   enum_values?: string[];
+  target_field?: string;
+  target_type?: string;
+  multiple?: boolean;
+  allowed_types?: string[];
+  min_items?: number;
+  max_items?: number;
+  component?: string;
+  repeatable?: boolean;
+  components?: string[];
+  preserve_order?: boolean;
 }
 
 export interface ContentField {
@@ -169,4 +180,3 @@ export interface ThemeManifest {
   settings?: Record<string, any>;
   is_active?: boolean;
 }
-

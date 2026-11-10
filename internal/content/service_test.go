@@ -210,3 +210,51 @@ func TestService_ValidationAndFailureScenarios(t *testing.T) {
 	err = svc.DeleteEntry(ctx, "products", "non-existent-id", false, "user-1")
 	assert.ErrorIs(t, err, ErrEntryNotFound)
 }
+
+func TestService_AdvancedFieldConfigurationAndUIDGeneration(t *testing.T) {
+	svc, _ := setupTestContentService(t)
+	ctx := context.Background()
+	maxItems := 3
+	_, err := svc.CreateContentType(ctx, CreateTypeRequest{
+		UID: "advanced", Name: "Advanced", Kind: KindCollection,
+		Fields: []ContentField{
+			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
+			{Name: "Slug", FieldKey: "slug", FieldType: fields.TypeUID, Configuration: fields.ValidationRules{Unique: true, TargetField: "title"}},
+			{Name: "Gallery", FieldKey: "gallery", FieldType: fields.TypeMedia, Configuration: fields.ValidationRules{Multiple: true, MaxItems: &maxItems}},
+			{Name: "Blocks", FieldKey: "blocks", FieldType: fields.TypeRepeatableComponent, Configuration: fields.ValidationRules{Component: "shared.block", MaxItems: &maxItems}},
+		},
+	})
+	require.NoError(t, err)
+
+	entry, err := svc.CreateEntry(ctx, "advanced", map[string]any{
+		"title":   "Hello Advanced Fields",
+		"gallery": []any{"media-1"},
+		"blocks":  []any{map[string]any{"heading": "Intro"}},
+	}, "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hello-advanced-fields", entry.Slug)
+
+	_, err = svc.CreateEntry(ctx, "advanced", map[string]any{
+		"title":   "Hello Advanced Fields",
+		"gallery": []any{},
+		"blocks":  []any{},
+	}, "user-2")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unique")
+}
+
+func TestService_RelationTargetAndEntryValidation(t *testing.T) {
+	svc, _ := setupTestContentService(t)
+	ctx := context.Background()
+	_, err := svc.CreateContentType(ctx, CreateTypeRequest{UID: "authors", Name: "Authors", Kind: KindCollection, Fields: []ContentField{{Name: "Name", FieldKey: "name", FieldType: fields.TypeShortText}}})
+	require.NoError(t, err)
+	author, err := svc.CreateEntry(ctx, "authors", map[string]any{"name": "Jane Doe"}, "user-1")
+	require.NoError(t, err)
+	_, err = svc.CreateContentType(ctx, CreateTypeRequest{UID: "posts", Name: "Posts", Kind: KindCollection, Fields: []ContentField{{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText}, {Name: "Author", FieldKey: "author", FieldType: fields.TypeSingleRelation, Configuration: fields.ValidationRules{TargetType: "authors"}}, {Name: "Related", FieldKey: "related", FieldType: fields.TypeMultipleRelation, Configuration: fields.ValidationRules{TargetType: "posts"}}}})
+	require.NoError(t, err)
+	entry, err := svc.CreateEntry(ctx, "posts", map[string]any{"title": "Post", "author": author.ID, "related": []any{}}, "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, author.ID, entry.DraftData["author"])
+	_, err = svc.CreateEntry(ctx, "posts", map[string]any{"title": "Invalid", "author": "missing", "related": []any{}}, "user-1")
+	assert.Error(t, err)
+}

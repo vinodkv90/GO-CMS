@@ -31,6 +31,7 @@ const (
 	TypeMultipleRelation    FieldType = "relation_multiple"
 	TypeComponent           FieldType = "component"
 	TypeRepeatableComponent FieldType = "repeatable_component"
+	TypeDynamicZone         FieldType = "dynamic_zone"
 	TypeUID                 FieldType = "uid"
 )
 
@@ -44,6 +45,18 @@ type ValidationRules struct {
 	Max       *float64 `json:"max,omitempty"`
 	Regex     string   `json:"regex,omitempty"`
 	EnumVals  []string `json:"enum_values,omitempty"`
+	// Advanced field settings are kept alongside validation rules for backward
+	// compatible schema JSON. They are validated by the content service.
+	TargetField   string   `json:"target_field,omitempty"`
+	TargetType    string   `json:"target_type,omitempty"`
+	Multiple      bool     `json:"multiple,omitempty"`
+	AllowedTypes  []string `json:"allowed_types,omitempty"`
+	MinItems      *int     `json:"min_items,omitempty"`
+	MaxItems      *int     `json:"max_items,omitempty"`
+	Component     string   `json:"component,omitempty"`
+	Repeatable    bool     `json:"repeatable,omitempty"`
+	Components    []string `json:"components,omitempty"`
+	PreserveOrder bool     `json:"preserve_order,omitempty"`
 }
 
 // FieldDefinition specifies the metadata and rules for a single content attribute.
@@ -210,8 +223,18 @@ func ValidateValue(def FieldDefinition, val any) error {
 
 	case TypeMedia:
 		// Media can be a string asset ID or slice of asset IDs
-		switch val.(type) {
-		case string, []string, []any:
+		switch v := val.(type) {
+		case string:
+			if def.Rules.Multiple {
+				return FieldError{Field: def.Name, Message: "expected an array of media asset IDs"}
+			}
+		case []string, []any:
+			if !def.Rules.Multiple {
+				return FieldError{Field: def.Name, Message: "expected a single media asset ID"}
+			}
+			if def.Rules.MaxItems != nil && lenSlice(v) > *def.Rules.MaxItems {
+				return FieldError{Field: def.Name, Message: "too many media assets selected"}
+			}
 			// Valid media reference
 		default:
 			return FieldError{Field: def.Name, Message: "expected media asset ID or array of IDs"}
@@ -229,9 +252,42 @@ func ValidateValue(def FieldDefinition, val any) error {
 		default:
 			return FieldError{Field: def.Name, Message: "expected array of target record IDs"}
 		}
+
+	case TypeComponent:
+		if _, ok := val.(map[string]any); !ok {
+			return FieldError{Field: def.Name, Message: "expected a component object"}
+		}
+
+	case TypeRepeatableComponent, TypeDynamicZone:
+		items, ok := val.([]any)
+		if !ok {
+			return FieldError{Field: def.Name, Message: "expected an array of component objects"}
+		}
+		if def.Rules.MinItems != nil && len(items) < *def.Rules.MinItems {
+			return FieldError{Field: def.Name, Message: "not enough component items"}
+		}
+		if def.Rules.MaxItems != nil && len(items) > *def.Rules.MaxItems {
+			return FieldError{Field: def.Name, Message: "too many component items"}
+		}
+		for _, item := range items {
+			if _, ok := item.(map[string]any); !ok {
+				return FieldError{Field: def.Name, Message: "each component item must be an object"}
+			}
+		}
 	}
 
 	return nil
+}
+
+func lenSlice(v any) int {
+	switch x := v.(type) {
+	case []string:
+		return len(x)
+	case []any:
+		return len(x)
+	default:
+		return 0
+	}
 }
 
 // Registry maintains allowed field types and plugins can register custom field types.
@@ -246,7 +302,7 @@ func NewRegistry() *Registry {
 		TypeShortText, TypeLongText, TypeRichText, TypeNumber, TypeDecimal,
 		TypeBoolean, TypeDate, TypeDateTime, TypeEmail, TypeSecret, TypeURL,
 		TypeEnum, TypeJSON, TypeMedia, TypeSingleRelation, TypeMultipleRelation,
-		TypeComponent, TypeRepeatableComponent, TypeUID,
+		TypeComponent, TypeRepeatableComponent, TypeDynamicZone, TypeUID,
 	}
 	for _, t := range builtins {
 		r.types[t] = true

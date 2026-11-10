@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -330,6 +331,9 @@ func (m *MemoryContentRepository) ListEntries(ctx context.Context, contentTypeID
 	for _, eid := range m.entriesByType[contentTypeID] {
 		if e, ok := m.entries[eid]; ok && e.DeletedAt == nil {
 			if filter.Status != "" && string(e.Status) != filter.Status {
+				continue
+			}
+			if filter.Search != "" && !strings.Contains(strings.ToLower(e.Slug+" "+fmt.Sprint(e.DraftData)), strings.ToLower(filter.Search)) {
 				continue
 			}
 			clone := *e

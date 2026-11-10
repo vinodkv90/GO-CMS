@@ -26,6 +26,7 @@ import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { contentTypesApi } from '../api/endpoints';
 import type { ContentType, FieldType } from '../types';
+import { ContentTypeSelector } from '../components/relations/ContentTypeSelector';
 
 export interface ContentTypesViewProps {
   contentTypes: ContentType[];
@@ -85,6 +86,12 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
   const [minLength, setMinLength] = useState<number | ''>('');
   const [maxLength, setMaxLength] = useState<number | ''>('');
   const [enumValues, setEnumValues] = useState('');
+  const [uidSource, setUidSource] = useState('');
+  const [relationTarget, setRelationTargetType] = useState('');
+  const [mediaMultiple, setMediaMultiple] = useState(false);
+  const [allowedMediaTypes, setAllowedMediaTypes] = useState('image');
+  const [componentName, setComponentName] = useState('');
+  const [componentList, setComponentList] = useState('');
 
   const handleNameChange = (val: string) => {
     setNewTypeName(val);
@@ -150,6 +157,17 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
           .map((v) => v.trim())
           .filter(Boolean);
       }
+      if (fieldType === 'uid') config.target_field = uidSource;
+      if (fieldType === 'media') {
+        config.multiple = mediaMultiple;
+        config.allowed_types = allowedMediaTypes.split(',').map((v) => v.trim()).filter(Boolean);
+      }
+      if (fieldType === 'relation_single' || fieldType === 'relation_multiple') config.target_type = relationTarget.trim();
+      if (fieldType === 'component' || fieldType === 'repeatable_component') {
+        config.component = componentName.trim();
+        config.repeatable = fieldType === 'repeatable_component';
+      }
+      if (fieldType === 'dynamic_zone') config.components = componentList.split(',').map((v) => v.trim()).filter(Boolean);
 
       await contentTypesApi.addField(targetType.uid, {
         name: fieldName.trim(),
@@ -166,6 +184,7 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
       setMinLength('');
       setMaxLength('');
       setEnumValues('');
+      setUidSource(''); setRelationTargetType(''); setMediaMultiple(false); setAllowedMediaTypes('image'); setComponentName(''); setComponentList('');
       onRefresh();
     } catch (err: any) {
       setError(err.message || 'Failed to add field');
@@ -536,6 +555,14 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
                 />
               </div>
             )}
+
+            {fieldType === 'uid' && targetType && (
+              <div className="pt-2"><label className="block text-xs font-semibold text-slate-700 mb-1">Attached Source Field</label><select value={uidSource} onChange={(e) => setUidSource(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm"><option value="">Select a text field</option>{targetType.fields?.filter((f) => ['short_text', 'long_text', 'rich_text'].includes(f.field_type)).map((f) => <option key={f.field_key} value={f.field_key}>{f.name}</option>)}</select></div>
+            )}
+            {fieldType === 'media' && <div className="pt-2 space-y-3"><label className="flex gap-2 text-xs font-semibold"><input type="checkbox" checked={mediaMultiple} onChange={(e) => setMediaMultiple(e.target.checked)} /> Allow multiple media</label><Input label="Allowed media categories" value={allowedMediaTypes} onChange={(e) => setAllowedMediaTypes(e.target.value)} helperText="Comma-separated: image, video, audio, document" /></div>}
+            {(fieldType === 'relation_single' || fieldType === 'relation_multiple') && <div className="pt-2"><ContentTypeSelector value={relationTarget} onChange={setRelationTargetType} excludeUid={targetType?.uid} /></div>}
+            {(fieldType === 'component' || fieldType === 'repeatable_component') && <div className="pt-2"><Input label="Component UID" placeholder="e.g. shared.seo" value={componentName} onChange={(e) => setComponentName(e.target.value)} required /></div>}
+            {fieldType === 'dynamic_zone' && <div className="pt-2"><Input label="Allowed component UIDs" placeholder="sections.hero, sections.features" value={componentList} onChange={(e) => setComponentList(e.target.value)} required /></div>}
           </div>
 
           <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
@@ -559,4 +586,3 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
     </div>
   );
 };
-
