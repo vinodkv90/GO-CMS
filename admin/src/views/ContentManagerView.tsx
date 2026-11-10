@@ -17,12 +17,27 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { entriesApi } from '../api/endpoints';
-import type { ContentType, ContentEntry, ContentVersion } from '../types';
+import { mediaApi } from '../api/endpoints';
+import type { ContentType, ContentEntry, ContentVersion, MediaAsset, ValidationRules } from '../types';
+import { RelationEntryPicker } from '../components/relations/RelationEntryPicker';
 
 export interface ContentManagerViewProps {
   contentType: ContentType;
   onBackToDashboard: () => void;
 }
+
+const inputClass = 'w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
+
+const MediaPicker: React.FC<{ value: unknown; multiple: boolean; onChange: (value: unknown) => void; allowedTypes?: string[] }> = ({ value, multiple, onChange, allowedTypes }) => {
+  const [assets, setAssets] = useState<MediaAsset[]>([]);
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const selected = Array.isArray(value) ? value.map(String) : value ? [String(value)] : [];
+  useEffect(() => { if (!open) return; mediaApi.list({ search, limit: 24 }).then((r) => setAssets((r.data || []).filter((a) => !allowedTypes?.length || allowedTypes.some((t) => a.mime_type.startsWith(`${t}/`) || a.mime_type === t)))).catch(() => setAssets([])); }, [open, search, allowedTypes]);
+  const choose = (id: string) => { const next = multiple ? Array.from(new Set([...selected, id])) : id; onChange(next); if (!multiple) setOpen(false); };
+  return <div className="space-y-2"><div className="flex flex-wrap gap-2">{selected.map((id) => <span key={id} className="px-2 py-1 rounded bg-sky-50 border border-sky-200 text-xs text-sky-800">{id}<button type="button" className="ml-2 text-rose-600" aria-label={`Remove ${id}`} onClick={() => onChange(multiple ? selected.filter((x) => x !== id) : '')}>×</button></span>)}</div><Button type="button" variant="outline" size="sm" onClick={() => setOpen(!open)}>{selected.length ? 'Replace / Add Media' : 'Select from Library'}</Button>{open && <div className="p-3 border rounded-lg bg-slate-50 space-y-2"><input className={inputClass} placeholder="Search media..." value={search} onChange={(e) => setSearch(e.target.value)} />{assets.length === 0 ? <p className="text-xs text-slate-500">No compatible media found.</p> : <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">{assets.map((asset) => <button type="button" key={asset.id} onClick={() => choose(asset.id)} className="p-2 text-left border rounded bg-white hover:border-sky-400"><span className="block text-xs font-semibold truncate">{asset.original_name}</span><span className="block text-[10px] text-slate-500">{asset.mime_type}</span></button>)}</div>}</div>}</div>;
+};
+
 
 export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
   contentType,
@@ -38,6 +53,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   // Version History Modal
@@ -80,6 +96,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
     setActiveEntry(null);
     setFormData(initial);
     setEditorError(null);
+    setJsonErrors({});
     setIsEditorOpen(true);
   };
 
@@ -88,12 +105,17 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
     setActiveEntry(entry);
     setFormData(entry.draft_data || {});
     setEditorError(null);
+    setJsonErrors({});
     setIsEditorOpen(true);
   };
 
   // Save draft
   const handleSaveDraft = async () => {
     setEditorError(null);
+    if (Object.keys(jsonErrors).length > 0) {
+      setEditorError('Fix invalid JSON before saving.');
+      return;
+    }
     setIsSaving(true);
     try {
       if (activeEntry) {
@@ -180,7 +202,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
   });
 
   // Render input field based on schema field type
-  const renderFieldInput = (fieldKey: string, fieldType: string, config?: any) => {
+  const renderFieldInput = (fieldKey: string, fieldType: string, config?: ValidationRules) => {
     const value = formData[fieldKey] ?? '';
 
     switch (fieldType) {
@@ -272,8 +294,9 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
               try {
                 const parsed = JSON.parse(e.target.value);
                 setFormData({ ...formData, [fieldKey]: parsed });
+                setJsonErrors((current) => { const next = { ...current }; delete next[fieldKey]; return next; });
               } catch {
-                setFormData({ ...formData, [fieldKey]: e.target.value });
+                setJsonErrors((current) => ({ ...current, [fieldKey]: 'Invalid JSON syntax' }));
               }
             }}
             className="w-full px-3 py-2 bg-slate-900 text-slate-100 font-mono text-xs rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -281,8 +304,25 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
           />
         );
 
-      default:
-        // short_text, uid, email, url, secret, media
+      case 'uid':
+        return <div className="flex gap-2"><input className={inputClass} value={String(value)} onChange={(e) => setFormData({ ...formData, [fieldKey]: e.target.value })} placeholder="my-first-post" /><Button type="button" variant="outline" size="sm" onClick={() => { const source = config?.target_field; const raw = source ? String(formData[source] || '') : ''; setFormData({ ...formData, [fieldKey]: raw.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') }); }}>Regenerate</Button></div>;
+
+      case 'media':
+        return <MediaPicker value={value} multiple={Boolean(config?.multiple)} allowedTypes={config?.allowed_types} onChange={(next) => setFormData({ ...formData, [fieldKey]: next })} />;
+
+      case 'relation_single':
+      case 'relation_multiple':
+        return <RelationEntryPicker contentTypeUid={config?.target_type || ''} multiple={fieldType === 'relation_multiple'} value={Array.isArray(value) ? value.map(String) : value ? [String(value)] : []} onChange={(next) => setFormData({ ...formData, [fieldKey]: fieldType === 'relation_multiple' ? next : (next[0] || '') })} />;
+
+      case 'component':
+      case 'repeatable_component':
+      case 'dynamic_zone':
+        return <textarea rows={6} className="w-full px-3 py-2 bg-slate-900 text-slate-100 font-mono text-xs rounded-lg" value={typeof value === 'string' ? value : JSON.stringify(value || (fieldType === 'component' ? {} : []), null, 2)} onChange={(e) => { try { setFormData({ ...formData, [fieldKey]: JSON.parse(e.target.value) }); } catch { /* keep editor text until valid JSON */ } }} placeholder={fieldType === 'dynamic_zone' ? '[]' : '{}'} aria-label={`${fieldKey} structured value`} />;
+
+      case 'short_text':
+      case 'email':
+      case 'url':
+      case 'secret':
         return (
           <input
             type={fieldType === 'secret' ? 'password' : 'text'}
@@ -292,6 +332,9 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
             className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
           />
         );
+
+      default:
+        return <div role="alert" className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800">Unsupported field type <code>{fieldType}</code>. This value cannot be edited as text.</div>;
     }
   };
 

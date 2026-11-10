@@ -46,11 +46,12 @@ export const contentTypesApi = {
 };
 
 export const entriesApi = {
-  list: (typeUID: string, params?: { limit?: number; offset?: number; preview?: boolean }) => {
+  list: (typeUID: string, params?: { limit?: number; offset?: number; preview?: boolean; search?: string }) => {
     const q = new URLSearchParams();
     if (params?.limit) q.set('limit', String(params.limit));
     if (params?.offset) q.set('offset', String(params.offset));
     if (params?.preview) q.set('preview', 'true');
+    if (params?.search) q.set('search', params.search);
     return api.get<{ data: ContentEntry[]; meta: { total: number } }>(
       `/content/${typeUID}?${q.toString()}`
     );
@@ -175,4 +176,3 @@ export const themesApi = {
 export const usersApi = {
   list: () => api.get<{ data: User[] }>('/users'),
 };
-

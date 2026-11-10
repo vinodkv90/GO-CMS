@@ -21,6 +21,8 @@ var (
 var validUIDRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var nonAlphaNumSlugRegex = regexp.MustCompile(`[^a-z0-9]+`)
 
+var errUniqueField = errors.New("unique field value already exists")
+
 func slugify(s string) string {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	clean := nonAlphaNumSlugRegex.ReplaceAllString(lower, "-")
@@ -130,6 +132,14 @@ func (s *Service) CreateContentType(ctx context.Context, req CreateTypeRequest) 
 		if !s.fieldReg.IsValid(f.FieldType) {
 			return nil, fmt.Errorf("invalid field type %q for field %q", f.FieldType, f.FieldKey)
 		}
+		if err := validateFieldConfiguration(f, req.Fields); err != nil {
+			return nil, err
+		}
+		if (f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation) && !strings.EqualFold(f.Configuration.TargetType, req.UID) {
+			if _, err := s.typeRepo.GetTypeByUID(ctx, f.Configuration.TargetType); err != nil {
+				return nil, fmt.Errorf("relation target content type %q does not exist", f.Configuration.TargetType)
+			}
+		}
 
 		if err := s.typeRepo.CreateField(ctx, &f); err != nil {
 			return nil, fmt.Errorf("failed to add field %q: %w", f.FieldKey, err)
@@ -195,6 +205,14 @@ func (s *Service) AddField(ctx context.Context, typeUID string, f ContentField) 
 	if !s.fieldReg.IsValid(f.FieldType) {
 		return fmt.Errorf("unsupported field type: %s", f.FieldType)
 	}
+	if err := validateFieldConfiguration(f, ct.Fields); err != nil {
+		return err
+	}
+	if f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation {
+		if _, err := s.typeRepo.GetTypeByUID(ctx, f.Configuration.TargetType); err != nil {
+			return fmt.Errorf("relation target content type %q does not exist", f.Configuration.TargetType)
+		}
+	}
 
 	f.ID = uuid.New().String()
 	f.ContentTypeID = ct.ID
@@ -221,7 +239,7 @@ func (s *Service) DeleteField(ctx context.Context, typeUID, fieldKey string) err
 // --- Content Entries & Manager ---
 
 // validateEntryData validates a data payload against the content type's field rules.
-func (s *Service) validateEntryData(ct *ContentType, data map[string]any) error {
+func (s *Service) validateEntryData(ctx context.Context, ct *ContentType, data map[string]any) error {
 	for _, f := range ct.Fields {
 		val := data[f.FieldKey]
 		def := fields.FieldDefinition{
@@ -233,8 +251,130 @@ func (s *Service) validateEntryData(ct *ContentType, data map[string]any) error 
 		if err := fields.ValidateValue(def, val); err != nil {
 			return err
 		}
+		if f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation {
+			if err := s.validateRelationValue(ctx, f, val); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func (s *Service) validateRelationValue(ctx context.Context, field ContentField, value any) error {
+	if value == nil || value == "" {
+		return nil
+	}
+	target, err := s.typeRepo.GetTypeByUID(ctx, field.Configuration.TargetType)
+	if err != nil {
+		return fmt.Errorf("relation %q target content type %q does not exist", field.FieldKey, field.Configuration.TargetType)
+	}
+	ids := []string{}
+	if field.FieldType == fields.TypeSingleRelation {
+		if id, ok := value.(string); ok {
+			ids = append(ids, id)
+		}
+	} else {
+		switch values := value.(type) {
+		case []string:
+			ids = append(ids, values...)
+		case []any:
+			for _, item := range values {
+				if id, ok := item.(string); ok {
+					ids = append(ids, id)
+				}
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("relation %q contains duplicate entry %q", field.FieldKey, id)
+		}
+		seen[id] = struct{}{}
+		entry, lookupErr := s.entryRepo.GetEntryByID(ctx, id)
+		if lookupErr != nil || entry.ContentTypeID != target.ID {
+			return fmt.Errorf("relation %q references an invalid target entry", field.FieldKey)
+		}
+	}
+	return nil
+}
+
+func validateFieldConfiguration(f ContentField, siblingFields []ContentField) error {
+	c := f.Configuration
+	if f.FieldType == fields.TypeUID {
+		// Legacy schemas may have a UID without a source field; retain their
+		// existing title-based fallback while new schemas can opt into binding.
+		if c.TargetField == "" {
+			return nil
+		}
+		if strings.EqualFold(c.TargetField, f.FieldKey) {
+			return fmt.Errorf("UID field %q cannot reference itself", f.FieldKey)
+		}
+		found := false
+		for _, sibling := range siblingFields {
+			if strings.EqualFold(sibling.FieldKey, c.TargetField) {
+				found = true
+				if sibling.FieldType != fields.TypeShortText && sibling.FieldType != fields.TypeLongText && sibling.FieldType != fields.TypeRichText {
+					return fmt.Errorf("UID source field %q must be text-compatible", c.TargetField)
+				}
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("UID source field %q does not exist", c.TargetField)
+		}
+	}
+	if (f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation) && c.TargetType == "" {
+		return fmt.Errorf("relation field %q requires target_type configuration", f.FieldKey)
+	}
+	if f.FieldType == fields.TypeMedia && !c.Multiple && c.MaxItems != nil && *c.MaxItems > 1 {
+		return fmt.Errorf("single media field %q cannot allow more than one item", f.FieldKey)
+	}
+	if (f.FieldType == fields.TypeComponent || f.FieldType == fields.TypeRepeatableComponent) && c.Component == "" {
+		return fmt.Errorf("component field %q requires component configuration", f.FieldKey)
+	}
+	if f.FieldType == fields.TypeDynamicZone && len(c.Components) == 0 {
+		return fmt.Errorf("dynamic zone field %q requires at least one component", f.FieldKey)
+	}
+	return nil
+}
+
+func (s *Service) validateUniqueFields(ctx context.Context, ct *ContentType, data map[string]any, currentID string) error {
+	entries, _, err := s.entryRepo.ListEntries(ctx, ct.ID, EntryFilter{Limit: 10000})
+	if err != nil {
+		return err
+	}
+	for _, f := range ct.Fields {
+		if !f.Configuration.Unique {
+			continue
+		}
+		value, exists := data[f.FieldKey]
+		if !exists || value == nil || value == "" {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.ID != currentID && fmt.Sprint(entry.DraftData[f.FieldKey]) == fmt.Sprint(value) {
+				return fmt.Errorf("%w: %s", errUniqueField, f.FieldKey)
+			}
+		}
+	}
+	return nil
+}
+
+// applyUIDFields materializes generated UID values into the JSON document so
+// REST responses, snapshots, and uniqueness checks all observe the same value.
+func applyUIDFields(ct *ContentType, data map[string]any) {
+	for _, f := range ct.Fields {
+		if f.FieldType != fields.TypeUID || f.Configuration.TargetField == "" {
+			continue
+		}
+		if current, ok := data[f.FieldKey].(string); ok && strings.TrimSpace(current) != "" {
+			continue
+		}
+		if source, ok := data[f.Configuration.TargetField].(string); ok && strings.TrimSpace(source) != "" {
+			data[f.FieldKey] = slugify(source)
+		}
+	}
 }
 
 // CreateEntry creates a new content entry in draft status.
@@ -244,8 +384,12 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 		return nil, err
 	}
 
+	applyUIDFields(ct, data)
 	// Validate data against content type schema
-	if err := s.validateEntryData(ct, data); err != nil {
+	if err := s.validateEntryData(ctx, ct, data); err != nil {
+		return nil, err
+	}
+	if err := s.validateUniqueFields(ctx, ct, data, ""); err != nil {
 		return nil, err
 	}
 
@@ -263,8 +407,20 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 	slug := ""
 	if sVal, ok := data["slug"].(string); ok && sVal != "" {
 		slug = sVal
-	} else if tVal, ok := data["title"].(string); ok && tVal != "" {
-		slug = slugify(tVal)
+	} else {
+		for _, f := range ct.Fields {
+			if f.FieldType == fields.TypeUID && f.Configuration.TargetField != "" {
+				if source, ok := data[f.Configuration.TargetField].(string); ok && source != "" {
+					slug = slugify(source)
+				}
+				break
+			}
+		}
+		if slug == "" {
+			if tVal, ok := data["title"].(string); ok && tVal != "" {
+				slug = slugify(tVal)
+			}
+		}
 	}
 
 	entry := &ContentEntry{
@@ -323,8 +479,12 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 		return nil, err
 	}
 
+	applyUIDFields(ct, data)
 	// Validate new data
-	if err := s.validateEntryData(ct, data); err != nil {
+	if err := s.validateEntryData(ctx, ct, data); err != nil {
+		return nil, err
+	}
+	if err := s.validateUniqueFields(ctx, ct, data, entryID); err != nil {
 		return nil, err
 	}
 
@@ -336,8 +496,18 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 	if sVal, ok := data["slug"].(string); ok && sVal != "" {
 		existing.Slug = sVal
 	} else if existing.Slug == "" {
-		if tVal, ok := data["title"].(string); ok && tVal != "" {
-			existing.Slug = slugify(tVal)
+		for _, f := range ct.Fields {
+			if f.FieldType == fields.TypeUID && f.Configuration.TargetField != "" {
+				if source, ok := data[f.Configuration.TargetField].(string); ok && source != "" {
+					existing.Slug = slugify(source)
+				}
+				break
+			}
+		}
+		if existing.Slug == "" {
+			if tVal, ok := data["title"].(string); ok && tVal != "" {
+				existing.Slug = slugify(tVal)
+			}
 		}
 	}
 

@@ -176,12 +176,14 @@ func (h *Handler) ListOrGetSingle(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	sortBy := r.URL.Query().Get("sort")
 	order := r.URL.Query().Get("order")
+	search := r.URL.Query().Get("search")
 
 	filter := EntryFilter{
 		Limit:     limit,
 		Offset:    offset,
 		SortBy:    sortBy,
 		SortOrder: order,
+		Search:    search,
 	}
 
 	entries, total, err := h.svc.ListEntries(r.Context(), uid, filter, previewDraft)

@@ -424,6 +424,10 @@ func (r *SQLContentRepository) ListEntries(ctx context.Context, contentTypeID st
 		whereClauses = append(whereClauses, "status = ?")
 		args = append(args, filter.Status)
 	}
+	if filter.Search != "" {
+		whereClauses = append(whereClauses, "LOWER(slug) LIKE LOWER(?)")
+		args = append(args, "%"+filter.Search+"%")
+	}
 
 	whereSQL := strings.Join(whereClauses, " AND ")
 
