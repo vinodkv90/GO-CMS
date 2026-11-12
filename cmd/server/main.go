@@ -82,6 +82,7 @@ func main() {
 	}
 
 	// 5. Initialize Auth and Content Services & Seed Standard Roles/Admin
+	fieldReg := fields.NewRegistry()
 	var authSvc *auth.Service
 	var contentSvc *content.Service
 	if sqlDB, ok := db.(interfaces.SQLDatabase); ok {
@@ -94,7 +95,7 @@ func main() {
 		}
 
 		contentRepo := content.NewSQLContentRepository(sqlDB)
-		contentSvc = content.NewService(contentRepo, contentRepo, contentRepo, fields.NewRegistry(), content.NewEventBus(), logger)
+		contentSvc = content.NewService(contentRepo, contentRepo, contentRepo, fieldReg, content.NewEventBus(), logger)
 	}
 
 	// Initialize Storage Provider and Media Service
@@ -105,6 +106,15 @@ func main() {
 	} else if sqlDB, ok := db.(interfaces.SQLDatabase); ok {
 		mediaRepo := media.NewSQLRepository(sqlDB)
 		mediaSvc = media.NewService(mediaRepo, localStorage, cfg, logger)
+		if contentSvc != nil {
+			contentSvc.SetMediaLookup(func(ctx context.Context, id string) (string, error) {
+				asset, err := mediaSvc.GetAsset(ctx, id)
+				if err != nil {
+					return "", err
+				}
+				return asset.MIMEType, nil
+			})
+		}
 		logger.Info("Media library service initialized", "provider", localStorage.Name(), "upload_dir", cfg.Media.UploadDir)
 	}
 
@@ -120,11 +130,9 @@ func main() {
 
 	// Initialize Plugin Manager and Register Reference Plugins
 	var eventBus *content.EventBus
-	var fieldReg *fields.Registry
 	if contentSvc != nil {
 		eventBus = contentSvc.EventBus()
 	}
-	fieldReg = fields.NewRegistry()
 
 	pluginMgr := plugins.NewManager(cfg.Plugins.PluginsDir, eventBus, fieldReg, db, logger)
 	if err := pluginMgr.Scan(); err != nil {

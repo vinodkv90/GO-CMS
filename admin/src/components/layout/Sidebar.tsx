@@ -60,10 +60,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="px-3 flex items-center justify-between mb-2">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Content Manager</p>
           </div>
-          {contentTypes.length === 0 ? (
+          {contentTypes.filter((type) => type.kind !== 'component').length === 0 ? (
             <div className="px-3 py-2 text-slate-400 italic text-[11px]">No content types yet</div>
           ) : (
-            contentTypes.map((ct) => (
+            contentTypes.filter((type) => type.kind !== 'component').map((ct) => (
               <button
                 key={ct.uid}
                 onClick={() => onSelectTab('content', ct.uid)}

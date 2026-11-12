@@ -65,6 +65,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <Input
+                id="login-username"
+                name="username"
                 label="Username"
                 type="text"
                 value={username}
@@ -77,6 +79,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
             <div>
               <Input
+                id="login-password"
+                name="password"
                 label="Password"
                 type="password"
                 value={password}

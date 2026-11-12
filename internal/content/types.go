@@ -12,6 +12,7 @@ type ContentKind string
 const (
 	KindCollection ContentKind = "collection"
 	KindSingle     ContentKind = "single"
+	KindComponent  ContentKind = "component"
 )
 
 // ContentStatus represents the publication state of a content entry.

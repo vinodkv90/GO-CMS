@@ -21,6 +21,7 @@ import (
 type HostAdapter struct {
 	mu         sync.RWMutex
 	pluginID   string
+	pluginName string
 	logger     *slog.Logger
 	eventBus   *content.EventBus
 	fieldReg   *fields.Registry
@@ -28,6 +29,13 @@ type HostAdapter struct {
 	db         interfaces.Database
 	settings   map[string]any
 	onSettings func(key string, val any)
+}
+
+// SetPluginName records the display name used when registering plugin metadata.
+func (h *HostAdapter) SetPluginName(name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pluginName = name
 }
 
 // NewHostAdapter creates a new HostAdapter for a specific plugin.
@@ -83,8 +91,23 @@ func (h *HostAdapter) RegisterFieldType(fieldType string, validator pluginsdk.Fi
 		return fmt.Errorf("field registry not available")
 	}
 
-	h.fieldReg.Register(fields.FieldType(fieldType))
-	h.logger.Info("Plugin registered custom field type", "type", fieldType)
+	h.mu.RLock()
+	pluginName := h.pluginName
+	h.mu.RUnlock()
+
+	var fn fields.FieldValidatorFunc
+	if validator != nil {
+		fn = fields.FieldValidatorFunc(validator)
+	}
+	desc := fields.CustomFieldDescriptor{
+		Type:       fields.FieldType(fieldType),
+		PluginSlug: h.pluginID,
+		PluginName: pluginName,
+	}
+	if err := h.fieldReg.RegisterCustom(desc, fn); err != nil {
+		return err
+	}
+	h.logger.Info("Plugin registered custom field type", "type", fieldType, "plugin", h.pluginID)
 	return nil
 }
 

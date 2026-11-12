@@ -216,6 +216,17 @@ func TestService_AdvancedFieldConfigurationAndUIDGeneration(t *testing.T) {
 	ctx := context.Background()
 	maxItems := 3
 	_, err := svc.CreateContentType(ctx, CreateTypeRequest{
+		UID: "shared.block", Name: "Block", Kind: KindComponent,
+		Fields: []ContentField{{Name: "Heading", FieldKey: "heading", FieldType: fields.TypeShortText}},
+	})
+	require.NoError(t, err)
+	svc.SetMediaLookup(func(_ context.Context, id string) (string, error) {
+		if id == "media-1" {
+			return "image/jpeg", nil
+		}
+		return "", ErrEntryNotFound
+	})
+	_, err = svc.CreateContentType(ctx, CreateTypeRequest{
 		UID: "advanced", Name: "Advanced", Kind: KindCollection,
 		Fields: []ContentField{
 			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
@@ -257,4 +268,28 @@ func TestService_RelationTargetAndEntryValidation(t *testing.T) {
 	assert.Equal(t, author.ID, entry.DraftData["author"])
 	_, err = svc.CreateEntry(ctx, "posts", map[string]any{"title": "Invalid", "author": "missing", "related": []any{}}, "user-1")
 	assert.Error(t, err)
+}
+
+func TestService_EntryOwnershipAndSecretPersistence(t *testing.T) {
+	svc, _ := setupTestContentService(t)
+	ctx := context.Background()
+	for _, uid := range []string{"first", "second"} {
+		_, err := svc.CreateContentType(ctx, CreateTypeRequest{UID: uid, Name: uid, Kind: KindCollection, Fields: []ContentField{
+			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
+			{Name: "Password", FieldKey: "password", FieldType: fields.TypeSecret},
+		}})
+		require.NoError(t, err)
+	}
+	entry, err := svc.CreateEntry(ctx, "first", map[string]any{"title": "One", "password": "VerySecret123!"}, "user-1")
+	require.NoError(t, err)
+	assert.NotEqual(t, "VerySecret123!", entry.DraftData["password"])
+	assert.NotContains(t, entry.DraftData["password"], "VerySecret123!")
+
+	_, err = svc.GetEntry(ctx, "second", entry.ID, true)
+	assert.ErrorIs(t, err, ErrEntryNotFound)
+	_, err = svc.UpdateEntry(ctx, "second", entry.ID, map[string]any{"title": "stolen"}, entry.DraftVersion, "user-2")
+	assert.ErrorIs(t, err, ErrEntryNotFound)
+	_, err = svc.PublishEntry(ctx, "second", entry.ID, "user-2")
+	assert.ErrorIs(t, err, ErrEntryNotFound)
+	assert.ErrorIs(t, svc.DeleteEntry(ctx, "second", entry.ID, false, "user-2"), ErrEntryNotFound)
 }

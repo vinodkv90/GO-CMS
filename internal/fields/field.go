@@ -1,15 +1,18 @@
+// Package fields defines built-in field configuration and value contracts.
+// Integrity, authorization, uniqueness, secret hashing, defaults, and recursive
+// component schema lookup belong to the content service.
 package fields
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"slices"
+	"sort"
 	"strings"
-	"time"
+	"sync"
 )
 
-// FieldType identifies the data type and rendering behavior of a field.
 type FieldType string
 
 const (
@@ -21,6 +24,7 @@ const (
 	TypeBoolean             FieldType = "boolean"
 	TypeDate                FieldType = "date"
 	TypeDateTime            FieldType = "datetime"
+	TypeTime                FieldType = "time"
 	TypeEmail               FieldType = "email"
 	TypeSecret              FieldType = "secret"
 	TypeURL                 FieldType = "url"
@@ -33,33 +37,51 @@ const (
 	TypeRepeatableComponent FieldType = "repeatable_component"
 	TypeDynamicZone         FieldType = "dynamic_zone"
 	TypeUID                 FieldType = "uid"
+	TypeBlocks              FieldType = "blocks"
 )
 
-// ValidationRules defines constraints applied to a field's value.
+// ValidationRules preserves existing configuration JSON keys. A nil Default
+// means no non-null default. Defaults are validated but never applied here.
 type ValidationRules struct {
-	Required  bool     `json:"required"`
-	Unique    bool     `json:"unique"`
-	MinLength *int     `json:"min_length,omitempty"`
-	MaxLength *int     `json:"max_length,omitempty"`
-	Min       *float64 `json:"min,omitempty"`
-	Max       *float64 `json:"max,omitempty"`
-	Regex     string   `json:"regex,omitempty"`
-	EnumVals  []string `json:"enum_values,omitempty"`
-	// Advanced field settings are kept alongside validation rules for backward
-	// compatible schema JSON. They are validated by the content service.
-	TargetField   string   `json:"target_field,omitempty"`
-	TargetType    string   `json:"target_type,omitempty"`
-	Multiple      bool     `json:"multiple,omitempty"`
-	AllowedTypes  []string `json:"allowed_types,omitempty"`
-	MinItems      *int     `json:"min_items,omitempty"`
-	MaxItems      *int     `json:"max_items,omitempty"`
-	Component     string   `json:"component,omitempty"`
-	Repeatable    bool     `json:"repeatable,omitempty"`
-	Components    []string `json:"components,omitempty"`
-	PreserveOrder bool     `json:"preserve_order,omitempty"`
+	Required            bool           `json:"required"`
+	Unique              bool           `json:"unique"`
+	MinLength           *int           `json:"min_length,omitempty"`
+	MaxLength           *int           `json:"max_length,omitempty"`
+	Min                 *float64       `json:"min,omitempty"`
+	Max                 *float64       `json:"max,omitempty"`
+	Regex               string         `json:"regex,omitempty"`
+	EnumVals            []string       `json:"enum_values,omitempty"`
+	TargetField         string         `json:"target_field,omitempty"`
+	TargetType          string         `json:"target_type,omitempty"`
+	Multiple            bool           `json:"multiple,omitempty"`
+	AllowedTypes        []string       `json:"allowed_types,omitempty"`
+	MinItems            *int           `json:"min_items,omitempty"`
+	MaxItems            *int           `json:"max_items,omitempty"`
+	Component           string         `json:"component,omitempty"`
+	Repeatable          bool           `json:"repeatable,omitempty"`
+	Components          []string       `json:"components,omitempty"`
+	PreserveOrder       bool           `json:"preserve_order,omitempty"`
+	Description         string         `json:"description,omitempty"`
+	Placeholder         string         `json:"placeholder,omitempty"`
+	Default             any            `json:"default,omitempty"`
+	LayoutWidth         string         `json:"layout_width,omitempty"`
+	Group               string         `json:"group,omitempty"`
+	Hidden              bool           `json:"hidden,omitempty"`
+	ReadOnly            bool           `json:"read_only,omitempty"`
+	Private             bool           `json:"private,omitempty"`
+	ReadRoles           []string       `json:"read_roles,omitempty"`
+	EditRoles           []string       `json:"edit_roles,omitempty"`
+	ErrorMessage        string         `json:"error_message,omitempty"`
+	AllowedProtocols    []string       `json:"allowed_protocols,omitempty"`
+	DateMin             string         `json:"date_min,omitempty"`
+	DateMax             string         `json:"date_max,omitempty"`
+	Timezone            string         `json:"timezone,omitempty"`
+	AllowedBlocks       []string       `json:"allowed_blocks,omitempty"`
+	JSONSchema          map[string]any `json:"json_schema,omitempty"`
+	RelationCardinality string         `json:"relation_cardinality,omitempty"`
 }
 
-// FieldDefinition specifies the metadata and rules for a single content attribute.
+// FieldDefinition retains legacy top-level metadata for compatibility.
 type FieldDefinition struct {
 	Name        string          `json:"name"`
 	Label       string          `json:"label"`
@@ -68,258 +90,292 @@ type FieldDefinition struct {
 	Default     any             `json:"default,omitempty"`
 	Rules       ValidationRules `json:"rules"`
 	ReadOnly    bool            `json:"read_only"`
-	Private     bool            `json:"private"`               // Excluded from unauthenticated or public API responses
-	TargetType  string          `json:"target_type,omitempty"` // For relations or components (slug of target)
+	Private     bool            `json:"private"`
+	TargetType  string          `json:"target_type,omitempty"`
 }
 
-// FieldError describes a validation failure for a specific field.
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
 }
 
-func (e FieldError) Error() string {
-	return fmt.Sprintf("field %q: %s", e.Field, e.Message)
+func (e FieldError) Error() string { return fmt.Sprintf("field %q: %s", e.Field, e.Message) }
+
+// FieldValidatorFunc validates a plugin-registered custom field value.
+type FieldValidatorFunc func(value any) error
+
+// CustomFieldDescriptor advertises a plugin-registered custom field type for the builder UI.
+type CustomFieldDescriptor struct {
+	Type        FieldType `json:"type"`
+	Label       string    `json:"label,omitempty"`
+	Description string    `json:"description,omitempty"`
+	PluginSlug  string    `json:"plugin_slug,omitempty"`
+	PluginName  string    `json:"plugin_name,omitempty"`
+	Settings    []string  `json:"settings,omitempty"`
 }
 
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
-var urlRegex = regexp.MustCompile(`^(http|https)://[^\s/$.?#].[^\s]*$`)
-var uidRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-
-// ValidateValue checks a raw value against a field's definition.
-func ValidateValue(def FieldDefinition, val any) error {
-	// 1. Required Check
-	if val == nil || val == "" {
-		if def.Rules.Required {
-			return FieldError{Field: def.Name, Message: "value is required"}
-		}
-		return nil
-	}
-
-	// 2. Type-specific validations
-	switch def.Type {
-	case TypeShortText, TypeLongText, TypeRichText:
-		str, ok := val.(string)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected string value"}
-		}
-		if def.Rules.MinLength != nil && len(str) < *def.Rules.MinLength {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("length must be at least %d characters", *def.Rules.MinLength)}
-		}
-		if def.Rules.MaxLength != nil && len(str) > *def.Rules.MaxLength {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("length cannot exceed %d characters", *def.Rules.MaxLength)}
-		}
-		if def.Rules.Regex != "" {
-			matched, err := regexp.MatchString(def.Rules.Regex, str)
-			if err != nil || !matched {
-				return FieldError{Field: def.Name, Message: "value does not match required pattern"}
-			}
-		}
-
-	case TypeUID:
-		str, ok := val.(string)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected string for UID"}
-		}
-		if !uidRegex.MatchString(str) {
-			return FieldError{Field: def.Name, Message: "UID must be lower-case alphanumeric with hyphens (e.g. my-first-post)"}
-		}
-
-	case TypeEmail:
-		str, ok := val.(string)
-		if !ok || !emailRegex.MatchString(str) {
-			return FieldError{Field: def.Name, Message: "invalid email format"}
-		}
-
-	case TypeURL:
-		str, ok := val.(string)
-		if !ok || !urlRegex.MatchString(str) {
-			return FieldError{Field: def.Name, Message: "invalid URL format (must begin with http:// or https://)"}
-		}
-
-	case TypeNumber:
-		var num float64
-		switch v := val.(type) {
-		case int:
-			num = float64(v)
-		case int64:
-			num = float64(v)
-		case float64:
-			num = v
-		default:
-			return FieldError{Field: def.Name, Message: "expected numeric value"}
-		}
-		if def.Rules.Min != nil && num < *def.Rules.Min {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("minimum allowed value is %v", *def.Rules.Min)}
-		}
-		if def.Rules.Max != nil && num > *def.Rules.Max {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("maximum allowed value is %v", *def.Rules.Max)}
-		}
-
-	case TypeDecimal:
-		num, ok := val.(float64)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected decimal number"}
-		}
-		if def.Rules.Min != nil && num < *def.Rules.Min {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("minimum allowed value is %v", *def.Rules.Min)}
-		}
-		if def.Rules.Max != nil && num > *def.Rules.Max {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("maximum allowed value is %v", *def.Rules.Max)}
-		}
-
-	case TypeBoolean:
-		if _, ok := val.(bool); !ok {
-			return FieldError{Field: def.Name, Message: "expected boolean (true/false)"}
-		}
-
-	case TypeDate:
-		str, ok := val.(string)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected ISO date string (YYYY-MM-DD)"}
-		}
-		if _, err := time.Parse("2006-01-02", str); err != nil {
-			return FieldError{Field: def.Name, Message: "invalid date format (expected YYYY-MM-DD)"}
-		}
-
-	case TypeDateTime:
-		str, ok := val.(string)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected RFC3339 datetime string"}
-		}
-		if _, err := time.Parse(time.RFC3339, str); err != nil {
-			return FieldError{Field: def.Name, Message: "invalid datetime format (expected RFC3339, e.g. 2026-11-08T15:00:00Z)"}
-		}
-
-	case TypeEnum:
-		str, ok := val.(string)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected string enumeration value"}
-		}
-		found := false
-		for _, e := range def.Rules.EnumVals {
-			if e == str {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return FieldError{Field: def.Name, Message: fmt.Sprintf("value %q must be one of: %s", str, strings.Join(def.Rules.EnumVals, ", "))}
-		}
-
-	case TypeJSON:
-		// Accept map, slice, or raw JSON string
-		switch v := val.(type) {
-		case map[string]any, []any:
-			// Valid JSON structures
-		case string:
-			var js any
-			if err := json.Unmarshal([]byte(v), &js); err != nil {
-				return FieldError{Field: def.Name, Message: "invalid JSON syntax"}
-			}
-		default:
-			return FieldError{Field: def.Name, Message: "expected valid JSON object or array"}
-		}
-
-	case TypeMedia:
-		// Media can be a string asset ID or slice of asset IDs
-		switch v := val.(type) {
-		case string:
-			if def.Rules.Multiple {
-				return FieldError{Field: def.Name, Message: "expected an array of media asset IDs"}
-			}
-		case []string, []any:
-			if !def.Rules.Multiple {
-				return FieldError{Field: def.Name, Message: "expected a single media asset ID"}
-			}
-			if def.Rules.MaxItems != nil && lenSlice(v) > *def.Rules.MaxItems {
-				return FieldError{Field: def.Name, Message: "too many media assets selected"}
-			}
-			// Valid media reference
-		default:
-			return FieldError{Field: def.Name, Message: "expected media asset ID or array of IDs"}
-		}
-
-	case TypeSingleRelation:
-		if _, ok := val.(string); !ok {
-			return FieldError{Field: def.Name, Message: "expected target record ID for single relation"}
-		}
-
-	case TypeMultipleRelation:
-		switch val.(type) {
-		case []string, []any:
-			// Valid list of target IDs
-		default:
-			return FieldError{Field: def.Name, Message: "expected array of target record IDs"}
-		}
-
-	case TypeComponent:
-		if _, ok := val.(map[string]any); !ok {
-			return FieldError{Field: def.Name, Message: "expected a component object"}
-		}
-
-	case TypeRepeatableComponent, TypeDynamicZone:
-		items, ok := val.([]any)
-		if !ok {
-			return FieldError{Field: def.Name, Message: "expected an array of component objects"}
-		}
-		if def.Rules.MinItems != nil && len(items) < *def.Rules.MinItems {
-			return FieldError{Field: def.Name, Message: "not enough component items"}
-		}
-		if def.Rules.MaxItems != nil && len(items) > *def.Rules.MaxItems {
-			return FieldError{Field: def.Name, Message: "too many component items"}
-		}
-		for _, item := range items {
-			if _, ok := item.(map[string]any); !ok {
-				return FieldError{Field: def.Name, Message: "each component item must be an object"}
-			}
-		}
-	}
-
-	return nil
+type customFieldEntry struct {
+	descriptor CustomFieldDescriptor
+	validator  FieldValidatorFunc
 }
 
-func lenSlice(v any) int {
-	switch x := v.(type) {
-	case []string:
-		return len(x)
-	case []any:
-		return len(x)
-	default:
-		return 0
-	}
+var defaultCustomSettings = []string{
+	"required",
+	"unique",
+	"description",
+	"placeholder",
+	"default",
+	"layout_width",
+	"group",
+	"hidden",
+	"read_only",
+	"private",
+	"read_roles",
+	"edit_roles",
+	"error_message",
 }
 
-// Registry maintains allowed field types and plugins can register custom field types.
+// Registry tracks active built-in and plugin-registered custom field types.
+// Bare Register registers names only; custom field validation in schema/entry
+// services requires explicit custom registration via RegisterCustom.
 type Registry struct {
-	types map[FieldType]bool
+	mu     sync.RWMutex
+	types  map[FieldType]bool
+	custom map[FieldType]customFieldEntry
 }
 
-// NewRegistry creates a registry initialized with all built-in field types.
 func NewRegistry() *Registry {
-	r := &Registry{types: make(map[FieldType]bool)}
-	builtins := []FieldType{
-		TypeShortText, TypeLongText, TypeRichText, TypeNumber, TypeDecimal,
-		TypeBoolean, TypeDate, TypeDateTime, TypeEmail, TypeSecret, TypeURL,
-		TypeEnum, TypeJSON, TypeMedia, TypeSingleRelation, TypeMultipleRelation,
-		TypeComponent, TypeRepeatableComponent, TypeDynamicZone, TypeUID,
+	r := &Registry{
+		types:  make(map[FieldType]bool),
+		custom: make(map[FieldType]customFieldEntry),
 	}
-	for _, t := range builtins {
-		r.types[t] = true
+	for ft := range capabilities {
+		r.types[ft] = true
 	}
 	return r
 }
 
-// Register adds a new field type (used by plugins).
 func (r *Registry) Register(ft FieldType) error {
 	if ft == "" {
 		return errors.New("field type cannot be empty")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.types == nil {
+		r.types = make(map[FieldType]bool)
 	}
 	r.types[ft] = true
 	return nil
 }
 
-// IsValid checks if a field type is recognized.
+// RegisterCustom registers a plugin custom field type with UI metadata and a runtime validator.
+func (r *Registry) RegisterCustom(desc CustomFieldDescriptor, validator FieldValidatorFunc) error {
+	desc.Type = FieldType(strings.TrimSpace(string(desc.Type)))
+	if desc.Type == "" {
+		return errors.New("field type cannot be empty")
+	}
+	if _, builtin := capabilities[desc.Type]; builtin {
+		return fmt.Errorf("cannot override built-in field type %q", desc.Type)
+	}
+	if strings.TrimSpace(desc.Label) == "" {
+		desc.Label = formatCustomFieldLabel(string(desc.Type))
+	}
+	if len(desc.Settings) == 0 {
+		desc.Settings = slices.Clone(defaultCustomSettings)
+	} else {
+		desc.Settings = slices.Clone(desc.Settings)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.types == nil {
+		r.types = make(map[FieldType]bool)
+	}
+	if r.custom == nil {
+		r.custom = make(map[FieldType]customFieldEntry)
+	}
+	r.types[desc.Type] = true
+	r.custom[desc.Type] = customFieldEntry{
+		descriptor: desc,
+		validator:  validator,
+	}
+	return nil
+}
+
+// UnregisterPluginFields removes all custom fields owned by pluginSlug.
+func (r *Registry) UnregisterPluginFields(pluginSlug string) {
+	if pluginSlug == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for ft, entry := range r.custom {
+		if entry.descriptor.PluginSlug == pluginSlug {
+			delete(r.custom, ft)
+			if _, builtin := capabilities[ft]; !builtin {
+				delete(r.types, ft)
+			}
+		}
+	}
+}
+
 func (r *Registry) IsValid(ft FieldType) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.types[ft]
+}
+
+// Capabilities returns built-in field capabilities plus active custom field capabilities.
+func (r *Registry) Capabilities() map[FieldType]FieldCapabilities {
+	out := Capabilities()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for ft, entry := range r.custom {
+		out[ft] = FieldCapabilities{Settings: slices.Clone(entry.descriptor.Settings)}
+	}
+	return out
+}
+
+// CustomFields returns metadata descriptors for all active plugin-registered custom fields.
+func (r *Registry) CustomFields() []CustomFieldDescriptor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]CustomFieldDescriptor, 0, len(r.custom))
+	for _, entry := range r.custom {
+		desc := entry.descriptor
+		desc.Settings = slices.Clone(desc.Settings)
+		out = append(out, desc)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PluginSlug != out[j].PluginSlug {
+			return out[i].PluginSlug < out[j].PluginSlug
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
+}
+
+// ValidateFieldConfiguration validates built-in or plugin-registered custom field configurations.
+func (r *Registry) ValidateFieldConfiguration(def FieldDefinition) error {
+	if _, builtin := capabilities[def.Type]; builtin {
+		return ValidateConfiguration(def)
+	}
+	entry, ok := r.customEntry(def.Type)
+	if !ok {
+		return ValidateConfiguration(def)
+	}
+	return validateCustomRules(def, entry, true)
+}
+
+// ValidateField validates built-in or plugin-registered custom field values.
+func (r *Registry) ValidateField(def FieldDefinition, val any) error {
+	if _, builtin := capabilities[def.Type]; builtin {
+		return ValidateValue(def, val)
+	}
+	entry, ok := r.customEntry(def.Type)
+	if !ok {
+		return ValidateValue(def, val)
+	}
+	if err := validateCustomRules(def, entry, false); err != nil {
+		return err
+	}
+	if isEmptyCustomValue(val) {
+		if def.Rules.Required {
+			if msg := strings.TrimSpace(def.Rules.ErrorMessage); msg != "" {
+				return errors.New(msg)
+			}
+			return errors.New("value is required")
+		}
+		return nil
+	}
+	if err := checkCustomJSONSize(val); err != nil {
+		return err
+	}
+	if entry.validator != nil {
+		if err := entry.validator(val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Registry) customEntry(ft FieldType) (customFieldEntry, bool) {
+	if r == nil {
+		return customFieldEntry{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.custom[ft]
+	return entry, ok
+}
+
+func validateCustomRules(def FieldDefinition, entry customFieldEntry, checkDefault bool) error {
+	switch def.Rules.LayoutWidth {
+	case "", "full", "half", "third", "two_thirds", "quarter":
+	default:
+		return fmt.Errorf("invalid layout_width %q", def.Rules.LayoutWidth)
+	}
+	for _, role := range def.Rules.ReadRoles {
+		if strings.TrimSpace(role) == "" {
+			return errors.New("read_roles entries must not be empty")
+		}
+	}
+	for _, role := range def.Rules.EditRoles {
+		if strings.TrimSpace(role) == "" {
+			return errors.New("edit_roles entries must not be empty")
+		}
+	}
+	if !checkDefault {
+		return nil
+	}
+	defaultVal := def.Rules.Default
+	if defaultVal == nil {
+		defaultVal = def.Default
+	}
+	if defaultVal != nil && !isEmptyCustomValue(defaultVal) {
+		if err := checkCustomJSONSize(defaultVal); err != nil {
+			return fmt.Errorf("invalid default value: %w", err)
+		}
+		if entry.validator != nil {
+			if err := entry.validator(defaultVal); err != nil {
+				return fmt.Errorf("invalid default value: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func isEmptyCustomValue(val any) bool {
+	if val == nil {
+		return true
+	}
+	if s, ok := val.(string); ok && s == "" {
+		return true
+	}
+	return false
+}
+
+func checkCustomJSONSize(val any) error {
+	raw, err := json.Marshal(val)
+	if err != nil {
+		return fmt.Errorf("value must be JSON-compatible: %w", err)
+	}
+	if len(raw) > MaxValueBytes {
+		return fmt.Errorf("value exceeds maximum allowed size (%d bytes)", MaxValueBytes)
+	}
+	return nil
+}
+
+func formatCustomFieldLabel(raw string) string {
+	cleaned := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(raw), "_", " "), "-", " ")
+	parts := strings.Fields(cleaned)
+	for i, p := range parts {
+		if len(p) > 0 {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	if len(parts) == 0 {
+		return raw
+	}
+	return strings.Join(parts, " ")
 }

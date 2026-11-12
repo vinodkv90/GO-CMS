@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
+import { ToastProvider } from './components/ui/Toast';
+import { CustomFieldsProvider } from './fields/CustomFieldContext';
 import { LoginView } from './views/LoginView';
 import { DashboardView } from './views/DashboardView';
 import { ContentTypesView } from './views/ContentTypesView';
@@ -9,7 +11,7 @@ import { MediaLibraryView } from './views/MediaLibraryView';
 import { PluginsView } from './views/PluginsView';
 import { ThemesView } from './views/ThemesView';
 import { UsersView } from './views/UsersView';
-import { getStoredToken, setStoredToken } from './api/client';
+import { getCookie, getStoredToken, setStoredToken } from './api/client';
 import {
   authApi,
   contentTypesApi,
@@ -30,7 +32,16 @@ const queryClient = new QueryClient();
 export function AppContent() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    return sessionStorage.getItem('cms_active_tab') || 'dashboard';
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && user) {
+      sessionStorage.setItem('cms_active_tab', currentTab);
+    }
+  }, [currentTab, user]);
 
   // Shared application state
   const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
@@ -42,13 +53,25 @@ export function AppContent() {
   useEffect(() => {
     const checkAuth = async () => {
       const token = getStoredToken();
-      if (!token) {
+      const hasCookieHint = Boolean(getCookie('cms_csrf'));
+      if (!token && !hasCookieHint) {
         setIsAuthChecking(false);
         return;
       }
       try {
         const res = await authApi.me();
-        setUser(res.data);
+        const resolved =
+          res && typeof res === 'object'
+            ? 'data' in res && res.data
+              ? res.data
+              : 'user' in res && res.user
+                ? res.user
+                : (res as User)
+            : null;
+        if (!resolved || (!resolved.id && !resolved.username)) {
+          throw new Error('Invalid session user payload');
+        }
+        setUser(resolved);
       } catch (err) {
         console.warn('Session expired or invalid:', err);
         setStoredToken(null);
@@ -95,6 +118,9 @@ export function AppContent() {
       setStoredToken(null);
       setUser(null);
       setCurrentTab('dashboard');
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('cms_active_tab');
+      }
     }
   };
 
@@ -124,7 +150,12 @@ export function AppContent() {
 
   if (isAuthChecking) {
     return (
-      <div className="min-h-screen w-screen flex items-center justify-center bg-slate-900 text-white">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        className="min-h-screen w-screen flex items-center justify-center bg-slate-900 text-white"
+      >
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 animate-pulse flex items-center justify-center font-bold text-lg">
             G
@@ -173,6 +204,8 @@ export function AppContent() {
       mainContent = (
         <ContentManagerView
           contentType={activeType}
+          contentTypes={contentTypes}
+          onSelectType={(nextUid) => setCurrentTab(`content:${nextUid}`)}
           onBackToDashboard={() => setCurrentTab('dashboard')}
         />
       );
@@ -211,6 +244,7 @@ export function AppContent() {
       contentTypes={contentTypes}
       onLogout={handleLogout}
       pageTitle={getPageTitle()}
+      fullBleed={currentTab === 'content-types' || currentTab.startsWith('content:')}
     >
       {mainContent}
     </Layout>
@@ -220,7 +254,11 @@ export function AppContent() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppContent />
+      <ToastProvider>
+        <CustomFieldsProvider>
+          <AppContent />
+        </CustomFieldsProvider>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

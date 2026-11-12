@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// AtomicContentTypeRepository optionally creates a schema and all its fields as
+// one operation. Implementations must leave no partial schema on failure.
+type AtomicContentTypeRepository interface {
+	CreateTypeWithFields(context.Context, *ContentType) error
+}
+
+// AtomicContentEntryRepository commits an entry mutation and its history record
+// together. expectedDraftVersion is zero for create_draft and positive otherwise.
+// update_draft/restore increment the draft version and preserve publication state;
+// publish/unpublish check the draft version but do not increment it. On success
+// entry contains the stored state and version contains the stored version number.
+// A non-nil version with the matching EntryID and supported Action is required.
+type AtomicContentEntryRepository interface {
+	CommitEntry(context.Context, *ContentEntry, int, *ContentVersion) error
+}
+
 var (
 	ErrContentTypeNotFound = errors.New("content type not found")
 	ErrContentTypeExists   = errors.New("content type with this UID already exists")
@@ -27,6 +43,7 @@ type ContentTypeRepository interface {
 	ListTypes(ctx context.Context) ([]*ContentType, error)
 
 	CreateField(ctx context.Context, field *ContentField) error
+	UpdateField(ctx context.Context, field *ContentField) error
 	ListFields(ctx context.Context, contentTypeID string) ([]ContentField, error)
 	DeleteField(ctx context.Context, fieldID string) error
 }

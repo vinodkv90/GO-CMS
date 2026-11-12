@@ -10,6 +10,7 @@ export interface LayoutProps {
   contentTypes: ContentType[];
   onLogout: () => void;
   pageTitle: string;
+  fullBleed?: boolean;
   children: React.ReactNode;
 }
 
@@ -20,6 +21,7 @@ export const Layout: React.FC<LayoutProps> = ({
   contentTypes,
   onLogout,
   pageTitle,
+  fullBleed = false,
   children,
 }) => {
   return (
@@ -32,10 +34,14 @@ export const Layout: React.FC<LayoutProps> = ({
       />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Topbar user={user} pageTitle={pageTitle} />
-        <main className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-7xl mx-auto space-y-6">
-            {children}
-          </div>
+        <main className={`flex-1 ${fullBleed ? 'overflow-hidden flex flex-col' : 'overflow-y-auto p-8'}`}>
+          {fullBleed ? (
+            children
+          ) : (
+            <div className="max-w-7xl mx-auto space-y-6">
+              {children}
+            </div>
+          )}
         </main>
       </div>
     </div>

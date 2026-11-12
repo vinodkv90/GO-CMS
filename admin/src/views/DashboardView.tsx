@@ -33,6 +33,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   themes,
   onSelectTab,
 }) => {
+  const managerTypes = contentTypes.filter((type) => type.kind !== 'component');
   const collectionCount = contentTypes.filter((t) => t.kind === 'collection').length;
   const singleCount = contentTypes.filter((t) => t.kind === 'single').length;
   const enabledPlugins = plugins.filter((p) => p.status === 'enabled').length;
@@ -97,7 +98,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Content Types</p>
-                <p className="text-3xl font-black text-slate-900 mt-2">{contentTypes.length}</p>
+                <p className="text-3xl font-black text-slate-900 mt-2">{managerTypes.length}</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
                 <Layers className="w-6 h-6" />
@@ -188,7 +189,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               }
             />
             <div className="divide-y divide-slate-100">
-              {contentTypes.length === 0 ? (
+              {managerTypes.length === 0 ? (
                 <div className="p-8 text-center text-slate-400">
                   <Layers className="w-8 h-8 mx-auto mb-2 text-slate-300" />
                   <p className="text-sm font-medium">No content types defined yet.</p>
@@ -202,7 +203,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </Button>
                 </div>
               ) : (
-                contentTypes.map((ct) => (
+                managerTypes.map((ct) => (
                   <div
                     key={ct.uid}
                     className="p-4 flex items-center justify-between hover:bg-slate-50/80 transition-colors"
@@ -302,4 +303,3 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     </div>
   );
 };
-

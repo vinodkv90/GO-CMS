@@ -31,6 +31,8 @@ export type FieldType =
   | 'boolean'
   | 'date'
   | 'datetime'
+  | 'time'
+  | 'blocks'
   | 'email'
   | 'secret'
   | 'url'
@@ -45,6 +47,26 @@ export type FieldType =
   | 'uid';
 
 export interface ValidationRules {
+  // Keep extension keys when editing schemas created by newer servers/plugins.
+  [key: string]: unknown;
+  description?: string;
+  placeholder?: string;
+  default?: unknown;
+  group?: string;
+  hidden?: boolean;
+  read_only?: boolean;
+  private?: boolean;
+  read_roles?: string[];
+  edit_roles?: string[];
+  error_message?: string;
+  allowed_protocols?: string[];
+  date_min?: string;
+  date_max?: string;
+  timezone?: string;
+  allowed_blocks?: string[];
+  json_schema?: Record<string, unknown>;
+  relation_cardinality?: 'many_to_one' | 'many_to_many';
+  layout_width?: 'full' | 'half' | 'third' | 'two-thirds';
   required?: boolean;
   unique?: boolean;
   min_length?: number;
@@ -73,7 +95,7 @@ export interface ContentField {
   configuration: ValidationRules;
 }
 
-export type ContentKind = 'collection' | 'single';
+export type ContentKind = 'collection' | 'single' | 'component';
 
 export interface ContentType {
   id: string;

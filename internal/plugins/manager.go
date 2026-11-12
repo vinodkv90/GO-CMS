@@ -220,16 +220,27 @@ func (m *Manager) Enable(ctx context.Context, id string) error {
 			entity.Settings[k] = v
 		},
 	)
+	adapter.SetPluginName(entity.Manifest.Name)
 	m.adapters[id] = adapter
 
 	// Initialize and start plugin
 	if err := instance.Init(ctx, adapter); err != nil {
+		if m.fieldReg != nil {
+			m.fieldReg.UnregisterPluginFields(id)
+		}
+		delete(m.adapters, id)
+		delete(m.subrouters, id)
 		entity.Status = StatusError
 		entity.ErrorMsg = fmt.Sprintf("init failure: %v", err)
 		return fmt.Errorf("failed to initialize plugin %q: %w", id, err)
 	}
 
 	if err := instance.Start(ctx); err != nil {
+		if m.fieldReg != nil {
+			m.fieldReg.UnregisterPluginFields(id)
+		}
+		delete(m.adapters, id)
+		delete(m.subrouters, id)
 		entity.Status = StatusError
 		entity.ErrorMsg = fmt.Sprintf("start failure: %v", err)
 		return fmt.Errorf("failed to start plugin %q: %w", id, err)
@@ -262,6 +273,9 @@ func (m *Manager) Disable(ctx context.Context, id string) error {
 		if err := instance.Stop(ctx); err != nil {
 			m.logger.Warn("Error stopping plugin instance", "id", id, "error", err)
 		}
+	}
+	if m.fieldReg != nil {
+		m.fieldReg.UnregisterPluginFields(id)
 	}
 
 	delete(m.adapters, id)

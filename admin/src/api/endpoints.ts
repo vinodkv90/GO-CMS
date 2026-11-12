@@ -19,7 +19,7 @@ export const authApi = {
       password: credentials.password,
     }),
 
-  me: () => api.get<{ data: User }>('/auth/me'),
+  me: () => api.get<User | { data?: User; user?: User }>('/auth/me'),
 
   logout: () => api.post('/auth/logout'),
 };
@@ -27,62 +27,91 @@ export const authApi = {
 export const contentTypesApi = {
   list: () => api.get<{ data: ContentType[] }>('/content-types'),
 
-  get: (uid: string) => api.get<{ data: ContentType }>(`/content-types/${uid}`),
+  get: (uid: string) => api.get<ContentType>(`/content-types/${uid}`),
+
+  update: (uid: string, data: { name?: string; settings?: Record<string, any> }) =>
+    api.put<ContentType>(`/content-types/${uid}`, data),
+
+  delete: (uid: string) => api.delete(`/content-types/${uid}`),
 
   create: (typeData: {
     name: string;
     uid: string;
-    kind: 'collection' | 'single';
+    kind: 'collection' | 'single' | 'component';
+    settings?: Record<string, unknown>;
     fields?: Array<{
       name: string;
       field_key: string;
       field_type: string;
       configuration?: Record<string, any>;
     }>;
-  }) => api.post<{ data: ContentType }>('/content-types', typeData),
+  }) => api.post<ContentType>('/content-types', typeData),
 
   addField: (uid: string, field: any) =>
     api.post<{ data: ContentType }>(`/content-types/${uid}/fields`, field),
+
+  updateField: (uid: string, fieldKey: string, field: any) =>
+    api.put<{ message: string }>(`/content-types/${uid}/fields/${fieldKey}`, field),
+
+  deleteField: (uid: string, fieldKey: string) =>
+    api.delete<{ message: string }>(`/content-types/${uid}/fields/${fieldKey}`),
 };
 
 export const entriesApi = {
-  list: (typeUID: string, params?: { limit?: number; offset?: number; preview?: boolean; search?: string }) => {
+  list: async (typeUID: string, params?: { limit?: number; offset?: number; preview?: boolean; search?: string; status?: string; sort?: string; order?: string }) => {
     const q = new URLSearchParams();
     if (params?.limit) q.set('limit', String(params.limit));
     if (params?.offset) q.set('offset', String(params.offset));
     if (params?.preview) q.set('preview', 'true');
     if (params?.search) q.set('search', params.search);
-    return api.get<{ data: ContentEntry[]; meta: { total: number } }>(
+    if (params?.status) q.set('status', params.status);
+    if (params?.sort) q.set('sort', params.sort);
+    if (params?.order) q.set('order', params.order);
+    const response = await api.get<{ data: ContentEntry[]; meta?: { total?: number }; total?: number } | ContentEntry>(
       `/content/${typeUID}?${q.toString()}`
     );
+    // Collection endpoints return a list envelope, while single content types
+    // return their one entry directly. Normalize both shapes for callers.
+    if (Array.isArray((response as { data?: unknown }).data)) {
+      const listResponse = response as { data: ContentEntry[]; meta?: { total?: number }; total?: number };
+      return {
+        data: listResponse.data,
+        meta: { total: listResponse.meta?.total ?? listResponse.total ?? listResponse.data.length },
+      };
+    }
+    return { data: response ? [response as ContentEntry] : [], meta: { total: response ? 1 : 0 } };
   },
 
   get: (typeUID: string, id: string, preview = true) =>
-    api.get<{ data: ContentEntry }>(`/content/${typeUID}/${id}${preview ? '?preview=true' : ''}`),
+    api.get<ContentEntry>(`/content/${typeUID}/${id}${preview ? '?preview=true' : ''}`),
 
   create: (typeUID: string, data: Record<string, any>) =>
-    api.post<{ data: ContentEntry }>(`/content/${typeUID}`, { data }),
+    api.post<ContentEntry>(`/content/${typeUID}`, { data }),
 
   update: (typeUID: string, id: string, data: Record<string, any>, expectedVersion: number) =>
-    api.patch<{ data: ContentEntry }>(`/content/${typeUID}/${id}`, {
+    api.put<ContentEntry>(`/content/${typeUID}/${id}`, {
       data,
-      expected_version: expectedVersion,
+      expected_draft_version: expectedVersion,
     }),
 
   publish: (typeUID: string, id: string) =>
-    api.post<{ data: ContentEntry }>(`/content/${typeUID}/${id}/publish`),
+    api.post<ContentEntry>(`/content/${typeUID}/${id}/publish`),
 
   unpublish: (typeUID: string, id: string) =>
-    api.post<{ data: ContentEntry }>(`/content/${typeUID}/${id}/unpublish`),
+    api.post<ContentEntry>(`/content/${typeUID}/${id}/unpublish`),
+
+  delete: (typeUID: string, id: string) => api.delete(`/content/${typeUID}/${id}`),
 
   versions: (typeUID: string, id: string) =>
     api.get<{ data: ContentVersion[] }>(`/content/${typeUID}/${id}/versions`),
 
   restore: (typeUID: string, id: string, versionNumber: number) =>
-    api.post<{ data: ContentEntry }>(`/content/${typeUID}/${id}/restore/${versionNumber}`),
+    api.post<ContentEntry>(`/content/${typeUID}/${id}/restore/${versionNumber}`),
 };
 
 export const mediaApi = {
+  get: (id: string) => api.get<{ data: MediaAsset }>(`/media/${id}`),
+
   list: (params?: { search?: string; mime_type?: string; limit?: number; offset?: number; folder_id?: string | null }) => {
     const q = new URLSearchParams();
     if (params?.search) q.set('search', params.search);

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+	"unicode"
+
 	"github.com/go-cms/cms/internal/fields"
 	"github.com/google/uuid"
 )
@@ -24,9 +27,18 @@ var nonAlphaNumSlugRegex = regexp.MustCompile(`[^a-z0-9]+`)
 var errUniqueField = errors.New("unique field value already exists")
 
 func slugify(s string) string {
-	lower := strings.ToLower(strings.TrimSpace(s))
-	clean := nonAlphaNumSlugRegex.ReplaceAllString(lower, "-")
-	return strings.Trim(clean, "-")
+	var ascii strings.Builder
+	for _, r := range norm.NFKD.String(strings.ToLower(strings.TrimSpace(s))) {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			ascii.WriteRune(r)
+		} else {
+			ascii.WriteByte('-')
+		}
+	}
+	return strings.Trim(nonAlphaNumSlugRegex.ReplaceAllString(ascii.String(), "-"), "-")
 }
 
 // CreateTypeRequest holds input for creating a new content type.
@@ -52,6 +64,7 @@ type Service struct {
 	fieldReg    *fields.Registry
 	eventBus    *EventBus
 	logger      *slog.Logger
+	mediaLookup func(context.Context, string) (string, error)
 }
 
 // NewService creates a new content service instance.
@@ -82,6 +95,45 @@ func NewService(
 	}
 }
 
+// FieldCapabilities returns supported configuration keys for built-in and active custom field types.
+func (s *Service) FieldCapabilities() map[fields.FieldType]fields.FieldCapabilities {
+	if s.fieldReg == nil {
+		return fields.Capabilities()
+	}
+	return s.fieldReg.Capabilities()
+}
+
+// CustomFields returns metadata descriptors for active plugin-registered custom field types.
+func (s *Service) CustomFields() []fields.CustomFieldDescriptor {
+	if s.fieldReg == nil {
+		return []fields.CustomFieldDescriptor{}
+	}
+	return s.fieldReg.CustomFields()
+}
+
+func wrapFieldError(fieldPath string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var fe fields.FieldError
+	if errors.As(err, &fe) {
+		msg := fe.Message
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fields.FieldError{Field: fieldPath, Message: msg}
+	}
+	return fields.FieldError{Field: fieldPath, Message: err.Error()}
+}
+
+func asFieldError(err error) (fields.FieldError, bool) {
+	var fe fields.FieldError
+	if errors.As(err, &fe) {
+		return fe, true
+	}
+	return fields.FieldError{}, false
+}
+
 // EventBus returns the content lifecycle event bus.
 func (s *Service) EventBus() *EventBus {
 	return s.eventBus
@@ -95,14 +147,17 @@ func (s *Service) CreateContentType(ctx context.Context, req CreateTypeRequest) 
 	if req.UID == "" {
 		return nil, errors.New("content type uid is required")
 	}
-	if !validUIDRegex.MatchString(req.UID) {
+	if (req.Kind == KindComponent && !validComponentUID.MatchString(req.UID)) || (req.Kind != KindComponent && !validUIDRegex.MatchString(req.UID)) {
 		return nil, errors.New("content type uid must be lower-case alphanumeric with hyphens (e.g. 'article', 'product-category')")
 	}
 	if req.Name == "" {
 		return nil, errors.New("content type name is required")
 	}
-	if req.Kind != KindCollection && req.Kind != KindSingle {
+	if req.Kind == "" {
 		req.Kind = KindCollection
+	}
+	if req.Kind != KindCollection && req.Kind != KindSingle && req.Kind != KindComponent {
+		return nil, errors.New("invalid content type kind")
 	}
 
 	now := time.Now().UTC()
@@ -118,10 +173,6 @@ func (s *Service) CreateContentType(ctx context.Context, req CreateTypeRequest) 
 		UpdatedAt: now,
 	}
 
-	if err := s.typeRepo.CreateType(ctx, ct); err != nil {
-		return nil, err
-	}
-
 	// Register initial fields if provided
 	for _, f := range req.Fields {
 		f.ID = uuid.New().String()
@@ -129,21 +180,13 @@ func (s *Service) CreateContentType(ctx context.Context, req CreateTypeRequest) 
 		f.CreatedAt = now
 		f.FieldKey = strings.TrimSpace(strings.ToLower(f.FieldKey))
 
-		if !s.fieldReg.IsValid(f.FieldType) {
-			return nil, fmt.Errorf("invalid field type %q for field %q", f.FieldType, f.FieldKey)
-		}
-		if err := validateFieldConfiguration(f, req.Fields); err != nil {
-			return nil, err
-		}
-		if (f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation) && !strings.EqualFold(f.Configuration.TargetType, req.UID) {
-			if _, err := s.typeRepo.GetTypeByUID(ctx, f.Configuration.TargetType); err != nil {
-				return nil, fmt.Errorf("relation target content type %q does not exist", f.Configuration.TargetType)
-			}
-		}
-
-		if err := s.typeRepo.CreateField(ctx, &f); err != nil {
-			return nil, fmt.Errorf("failed to add field %q: %w", f.FieldKey, err)
-		}
+		ct.Fields = append(ct.Fields, f)
+	}
+	if err := s.validateSchema(ctx, ct); err != nil {
+		return nil, err
+	}
+	if err := s.createTypeWithFields(ctx, ct); err != nil {
+		return nil, err
 	}
 
 	return s.typeRepo.GetTypeByUID(ctx, req.UID)
@@ -187,6 +230,12 @@ func (s *Service) DeleteContentType(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.ensureTypeUnreferenced(ctx, ct); err != nil {
+		return err
+	}
+	entries, total, err := s.entryRepo.ListEntries(ctx, ct.ID, EntryFilter{Limit: 1})
+	if err != nil { return err }
+	if total > 0 || len(entries) > 0 { return fmt.Errorf("%w: content type %s still has entries", ErrReferenced, ct.UID) }
 	return s.typeRepo.DeleteType(ctx, ct.ID)
 }
 
@@ -205,13 +254,10 @@ func (s *Service) AddField(ctx context.Context, typeUID string, f ContentField) 
 	if !s.fieldReg.IsValid(f.FieldType) {
 		return fmt.Errorf("unsupported field type: %s", f.FieldType)
 	}
-	if err := validateFieldConfiguration(f, ct.Fields); err != nil {
+	proposed := *ct
+	proposed.Fields = append(append([]ContentField(nil), ct.Fields...), f)
+	if err := s.validateSchema(ctx, &proposed); err != nil {
 		return err
-	}
-	if f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation {
-		if _, err := s.typeRepo.GetTypeByUID(ctx, f.Configuration.TargetType); err != nil {
-			return fmt.Errorf("relation target content type %q does not exist", f.Configuration.TargetType)
-		}
 	}
 
 	f.ID = uuid.New().String()
@@ -230,7 +276,48 @@ func (s *Service) DeleteField(ctx context.Context, typeUID, fieldKey string) err
 
 	for _, f := range ct.Fields {
 		if strings.EqualFold(f.FieldKey, fieldKey) {
+			proposed := *ct
+			proposed.Fields = nil
+			for _, sibling := range ct.Fields {
+				if sibling.ID != f.ID {
+					proposed.Fields = append(proposed.Fields, sibling)
+				}
+			}
+			if err := s.validateSchema(ctx, &proposed); err != nil {
+				return err
+			}
 			return s.typeRepo.DeleteField(ctx, f.ID)
+		}
+	}
+	return ErrFieldNotFound
+}
+
+// UpdateField updates a field definition without changing its key or position.
+func (s *Service) UpdateField(ctx context.Context, typeUID, fieldKey string, updated ContentField) error {
+	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	if err != nil {
+		return err
+	}
+	for _, field := range ct.Fields {
+		if strings.EqualFold(field.FieldKey, fieldKey) {
+			updated.ID = field.ID
+			updated.ContentTypeID = field.ContentTypeID
+			updated.FieldKey = field.FieldKey
+			updated.CreatedAt = field.CreatedAt
+			if !s.fieldReg.IsValid(updated.FieldType) {
+				return fmt.Errorf("unsupported field type: %s", updated.FieldType)
+			}
+			proposed := *ct
+			proposed.Fields = append([]ContentField(nil), ct.Fields...)
+			for i := range proposed.Fields {
+				if proposed.Fields[i].ID == field.ID {
+					proposed.Fields[i] = updated
+				}
+			}
+			if err := s.validateSchema(ctx, &proposed); err != nil {
+				return err
+			}
+			return s.typeRepo.UpdateField(ctx, &updated)
 		}
 	}
 	return ErrFieldNotFound
@@ -248,12 +335,12 @@ func (s *Service) validateEntryData(ctx context.Context, ct *ContentType, data m
 			Type:  f.FieldType,
 			Rules: f.Configuration,
 		}
-		if err := fields.ValidateValue(def, val); err != nil {
-			return err
+		if err := s.fieldReg.ValidateField(def, val); err != nil {
+			return wrapFieldError(f.FieldKey, err)
 		}
 		if f.FieldType == fields.TypeSingleRelation || f.FieldType == fields.TypeMultipleRelation {
 			if err := s.validateRelationValue(ctx, f, val); err != nil {
-				return err
+				return wrapFieldError(f.FieldKey, err)
 			}
 		}
 	}
@@ -379,17 +466,12 @@ func applyUIDFields(ct *ContentType, data map[string]any) {
 
 // CreateEntry creates a new content entry in draft status.
 func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[string]any, userID string) (*ContentEntry, error) {
-	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, err := s.entryType(ctx, typeUID)
 	if err != nil {
 		return nil, err
 	}
-
-	applyUIDFields(ct, data)
-	// Validate data against content type schema
-	if err := s.validateEntryData(ctx, ct, data); err != nil {
-		return nil, err
-	}
-	if err := s.validateUniqueFields(ctx, ct, data, ""); err != nil {
+	data, err = s.prepareData(ctx, ct, data, nil, 0, "", false, true)
+	if err != nil {
 		return nil, err
 	}
 
@@ -409,11 +491,11 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 		slug = sVal
 	} else {
 		for _, f := range ct.Fields {
-			if f.FieldType == fields.TypeUID && f.Configuration.TargetField != "" {
-				if source, ok := data[f.Configuration.TargetField].(string); ok && source != "" {
-					slug = slugify(source)
+			if f.FieldType == fields.TypeUID {
+				if value, ok := data[f.FieldKey].(string); ok {
+					slug = value
+					break
 				}
-				break
 			}
 		}
 		if slug == "" {
@@ -445,21 +527,18 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 	}
 
 	// 2. Persist Entry
-	if err := s.entryRepo.CreateEntry(ctx, entry); err != nil {
-		return nil, err
-	}
-
-	// 3. Record Initial Version Snapshot
 	version := &ContentVersion{
 		ID:            uuid.New().String(),
 		EntryID:       entryID,
 		VersionNumber: 1,
-		Snapshot:      data,
+		Snapshot:      cloneData(data),
 		Action:        "create_draft",
 		ChangedBy:     userID,
 		CreatedAt:     now,
 	}
-	_ = s.versionRepo.CreateVersion(ctx, version)
+	if err := s.commitEntry(ctx, entry, 0, version); err != nil {
+		return nil, err
+	}
 
 	// 4. Emit AfterCreate lifecycle hook
 	_ = s.eventBus.Emit(ctx, EventAfterCreate, entry)
@@ -469,22 +548,12 @@ func (s *Service) CreateEntry(ctx context.Context, typeUID string, data map[stri
 
 // UpdateEntry updates an entry's draft data with optimistic concurrency control.
 func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data map[string]any, expectedDraftVersion int, userID string) (*ContentEntry, error) {
-	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, existing, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
-
-	existing, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	data, err = s.prepareData(ctx, ct, data, existing.DraftData, 0, "", false, true)
 	if err != nil {
-		return nil, err
-	}
-
-	applyUIDFields(ct, data)
-	// Validate new data
-	if err := s.validateEntryData(ctx, ct, data); err != nil {
-		return nil, err
-	}
-	if err := s.validateUniqueFields(ctx, ct, data, entryID); err != nil {
 		return nil, err
 	}
 
@@ -495,13 +564,13 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 
 	if sVal, ok := data["slug"].(string); ok && sVal != "" {
 		existing.Slug = sVal
-	} else if existing.Slug == "" {
+	} else {
 		for _, f := range ct.Fields {
-			if f.FieldType == fields.TypeUID && f.Configuration.TargetField != "" {
-				if source, ok := data[f.Configuration.TargetField].(string); ok && source != "" {
-					existing.Slug = slugify(source)
+			if f.FieldType == fields.TypeUID {
+				if value, ok := data[f.FieldKey].(string); ok {
+					existing.Slug = value
+					break
 				}
-				break
 			}
 		}
 		if existing.Slug == "" {
@@ -517,21 +586,18 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 	}
 
 	// 2. Persist update with version verification
-	if err := s.entryRepo.UpdateEntry(ctx, existing, expectedDraftVersion); err != nil {
-		return nil, err
-	}
-
-	// 3. Create historical version snapshot
 	version := &ContentVersion{
 		ID:            uuid.New().String(),
 		EntryID:       entryID,
 		VersionNumber: existing.DraftVersion,
-		Snapshot:      data,
+		Snapshot:      cloneData(data),
 		Action:        "update_draft",
 		ChangedBy:     userID,
 		CreatedAt:     now,
 	}
-	_ = s.versionRepo.CreateVersion(ctx, version)
+	if err := s.commitEntry(ctx, existing, expectedDraftVersion, version); err != nil {
+		return nil, err
+	}
 
 	// 4. Emit AfterUpdate hook
 	_ = s.eventBus.Emit(ctx, EventAfterUpdate, existing)
@@ -541,12 +607,14 @@ func (s *Service) UpdateEntry(ctx context.Context, typeUID, entryID string, data
 
 // PublishEntry promotes the current draft_data to published_data.
 func (s *Service) PublishEntry(ctx context.Context, typeUID, entryID string, userID string) (*ContentEntry, error) {
-	_, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, entry, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
-
-	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	if err := s.validateSchema(ctx, ct); err != nil {
+		return nil, err
+	}
+	entry.DraftData, err = s.prepareData(ctx, ct, entry.DraftData, nil, 0, "", true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -571,12 +639,7 @@ func (s *Service) PublishEntry(ctx context.Context, typeUID, entryID string, use
 		return nil, err
 	}
 
-	// 2. Persist Entry using dedicated publish operation
-	if err := s.entryRepo.PublishEntry(ctx, entry.ID, pubData, entry.DraftVersion, now, userID); err != nil {
-		return nil, err
-	}
-
-	// 3. Record Version
+	// Persist the publication and its immutable snapshot atomically when supported.
 	version := &ContentVersion{
 		ID:            uuid.New().String(),
 		EntryID:       entryID,
@@ -586,7 +649,9 @@ func (s *Service) PublishEntry(ctx context.Context, typeUID, entryID string, use
 		ChangedBy:     userID,
 		CreatedAt:     now,
 	}
-	_ = s.versionRepo.CreateVersion(ctx, version)
+	if err := s.commitEntry(ctx, entry, entry.DraftVersion, version); err != nil {
+		return nil, err
+	}
 
 	// 4. Emit AfterPublish hook
 	_ = s.eventBus.Emit(ctx, EventAfterPublish, entry)
@@ -596,12 +661,7 @@ func (s *Service) PublishEntry(ctx context.Context, typeUID, entryID string, use
 
 // UnpublishEntry sets the status to draft and removes the live published_data.
 func (s *Service) UnpublishEntry(ctx context.Context, typeUID, entryID string, userID string) (*ContentEntry, error) {
-	_, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
-	if err != nil {
-		return nil, err
-	}
-
-	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	_, entry, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -613,10 +673,6 @@ func (s *Service) UnpublishEntry(ctx context.Context, typeUID, entryID string, u
 	entry.UpdatedBy = userID
 	entry.UpdatedAt = now
 
-	if err := s.entryRepo.UnpublishEntry(ctx, entry.ID, userID); err != nil {
-		return nil, err
-	}
-
 	version := &ContentVersion{
 		ID:            uuid.New().String(),
 		EntryID:       entryID,
@@ -626,19 +682,16 @@ func (s *Service) UnpublishEntry(ctx context.Context, typeUID, entryID string, u
 		ChangedBy:     userID,
 		CreatedAt:     now,
 	}
-	_ = s.versionRepo.CreateVersion(ctx, version)
+	if err := s.commitEntry(ctx, entry, entry.DraftVersion, version); err != nil {
+		return nil, err
+	}
 
 	return entry, nil
 }
 
 // GetEntry retrieves a single entry by ID. If previewDraft is false, returns published view only.
 func (s *Service) GetEntry(ctx context.Context, typeUID, entryID string, previewDraft bool) (*ContentEntry, error) {
-	_, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
-	if err != nil {
-		return nil, err
-	}
-
-	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	_, entry, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +707,7 @@ func (s *Service) GetEntry(ctx context.Context, typeUID, entryID string, preview
 
 // GetEntryBySlug retrieves a single entry by its slug.
 func (s *Service) GetEntryBySlug(ctx context.Context, typeUID, slug string, previewDraft bool) (*ContentEntry, error) {
-	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, err := s.entryType(ctx, typeUID)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +728,7 @@ func (s *Service) GetEntryBySlug(ctx context.Context, typeUID, slug string, prev
 
 // GetSingleEntry retrieves the singleton entry for a single content type.
 func (s *Service) GetSingleEntry(ctx context.Context, typeUID string, previewDraft bool) (*ContentEntry, error) {
-	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, err := s.entryType(ctx, typeUID)
 	if err != nil {
 		return nil, err
 	}
@@ -696,7 +749,7 @@ func (s *Service) GetSingleEntry(ctx context.Context, typeUID string, previewDra
 
 // ListEntries queries entries for a collection content type.
 func (s *Service) ListEntries(ctx context.Context, typeUID string, filter EntryFilter, previewDraft bool) ([]*ContentEntry, int, error) {
-	ct, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	ct, err := s.entryType(ctx, typeUID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -711,7 +764,7 @@ func (s *Service) ListEntries(ctx context.Context, typeUID string, filter EntryF
 
 // DeleteEntry deletes an entry (soft delete by default).
 func (s *Service) DeleteEntry(ctx context.Context, typeUID, entryID string, hardDelete bool, userID string) error {
-	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	_, entry, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return err
 	}
@@ -734,7 +787,7 @@ func (s *Service) DeleteEntry(ctx context.Context, typeUID, entryID string, hard
 
 // ListVersions returns the version history of an entry.
 func (s *Service) ListVersions(ctx context.Context, typeUID, entryID string) ([]*ContentVersion, error) {
-	_, err := s.typeRepo.GetTypeByUID(ctx, typeUID)
+	_, _, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +796,7 @@ func (s *Service) ListVersions(ctx context.Context, typeUID, entryID string) ([]
 
 // RestoreVersion restores an entry's draft_data from an earlier snapshot version.
 func (s *Service) RestoreVersion(ctx context.Context, typeUID, entryID string, versionNumber int, userID string) (*ContentEntry, error) {
-	entry, err := s.entryRepo.GetEntryByID(ctx, entryID)
+	ct, entry, err := s.ownedEntry(ctx, typeUID, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -754,26 +807,26 @@ func (s *Service) RestoreVersion(ctx context.Context, typeUID, entryID string, v
 	}
 
 	now := time.Now().UTC()
-	entry.DraftData = ver.Snapshot
+	prepared, err := s.prepareData(ctx, ct, ver.Snapshot, entry.DraftData, 0, "", true, false)
+	if err != nil {
+		return nil, err
+	}
+	entry.DraftData = prepared
 	entry.UpdatedBy = userID
 	entry.UpdatedAt = now
 
-	// Optimistic update
-	if err := s.entryRepo.UpdateEntry(ctx, entry, entry.DraftVersion); err != nil {
-		return nil, err
-	}
-
-	// Record restore as a new version snapshot
 	newVer := &ContentVersion{
 		ID:            uuid.New().String(),
 		EntryID:       entryID,
 		VersionNumber: entry.DraftVersion,
 		Snapshot:      ver.Snapshot,
-		Action:        fmt.Sprintf("restore_from_v%d", versionNumber),
+		Action:        "restore",
 		ChangedBy:     userID,
 		CreatedAt:     now,
 	}
-	_ = s.versionRepo.CreateVersion(ctx, newVer)
+	if err := s.commitEntry(ctx, entry, entry.DraftVersion, newVer); err != nil {
+		return nil, err
+	}
 
 	return entry, nil
 }

@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,10 @@ import (
 )
 
 func setupTestHTTPRouter(t *testing.T) (*chi.Mux, *Service, *auth.Service, string) {
+	return setupTestHTTPRouterWithRegistry(t, fields.NewRegistry())
+}
+
+func setupTestHTTPRouterWithRegistry(t *testing.T, reg *fields.Registry) (*chi.Mux, *Service, *auth.Service, string) {
 	// Auth Setup
 	authRepo := auth.NewMemoryAuthRepository()
 	cfg := config.DefaultConfig()
@@ -31,7 +36,7 @@ func setupTestHTTPRouter(t *testing.T) (*chi.Mux, *Service, *auth.Service, strin
 
 	// Content Setup
 	contentRepo := NewMemoryContentRepository()
-	contentSvc := NewService(contentRepo, contentRepo, contentRepo, fields.NewRegistry(), NewEventBus(), nil)
+	contentSvc := NewService(contentRepo, contentRepo, contentRepo, reg, NewEventBus(), nil)
 
 	r := chi.NewRouter()
 	r.Use(auth.AuthMiddleware(authSvc))
@@ -122,4 +127,183 @@ func TestContentHTTP_FullFlow(t *testing.T) {
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestContentHTTP_RedactsSecretsAndPrivatePublicFields(t *testing.T) {
+	router, svc, _, token := setupTestHTTPRouter(t)
+	ctx := t.Context()
+	_, err := svc.CreateContentType(ctx, CreateTypeRequest{UID: "secrets", Name: "Secrets", Kind: KindCollection, Fields: []ContentField{
+		{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
+		{Name: "Password", FieldKey: "password", FieldType: fields.TypeSecret},
+		{Name: "Private note", FieldKey: "private_note", FieldType: fields.TypeShortText, Configuration: fields.ValidationRules{Private: true}},
+	}})
+	require.NoError(t, err)
+	entry, err := svc.CreateEntry(ctx, "secrets", map[string]any{"title": "Safe", "password": "HiddenPassword123!", "private_note": "Internal"}, "admin")
+	require.NoError(t, err)
+	_, err = svc.PublishEntry(ctx, "secrets", entry.ID, "admin")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/content/secrets/"+entry.ID, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var public map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &public))
+	publicData := public["data"].(map[string]any)
+	assert.Equal(t, "Safe", publicData["title"])
+	assert.NotContains(t, publicData, "password")
+	assert.NotContains(t, publicData, "private_note")
+
+	req = httptest.NewRequest(http.MethodGet, "/content/secrets/"+entry.ID+"?preview=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var preview ContentEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &preview))
+	assert.NotContains(t, preview.DraftData, "password")
+	assert.Equal(t, "Internal", preview.DraftData["private_note"])
+}
+
+func TestContentHTTP_CustomFieldsSettingsOrderAndFieldErrors(t *testing.T) {
+	reg := fields.NewRegistry()
+	require.NoError(t, reg.RegisterCustom(fields.CustomFieldDescriptor{
+		Type:       fields.FieldType("color_hex"),
+		Label:      "Color Hex",
+		PluginSlug: "colors",
+		PluginName: "Colors",
+	}, func(val any) error {
+		s, ok := val.(string)
+		if !ok || len(s) != 7 || s[0] != '#' {
+			return fmt.Errorf("invalid hex color")
+		}
+		return nil
+	}))
+
+	router, _, _, token := setupTestHTTPRouterWithRegistry(t, reg)
+
+	// 1. Custom fields endpoint + capabilities
+	req := httptest.NewRequest(http.MethodGet, "/content-types/custom-fields", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var customList []fields.CustomFieldDescriptor
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &customList))
+	require.Len(t, customList, 1)
+	assert.Equal(t, fields.FieldType("color_hex"), customList[0].Type)
+
+	req = httptest.NewRequest(http.MethodGet, "/content-types/field-capabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var caps map[string]fields.FieldCapabilities
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &caps))
+	assert.Contains(t, caps, "color_hex")
+
+	// 2. Create component + collection type with custom field
+	compPayload := CreateTypeRequest{
+		UID:  "shared.badge",
+		Name: "Badge",
+		Kind: KindComponent,
+		Fields: []ContentField{
+			{Name: "Label", FieldKey: "label", FieldType: fields.TypeShortText, Configuration: fields.ValidationRules{Required: true}},
+		},
+	}
+	body, _ := json.Marshal(compPayload)
+	req = httptest.NewRequest(http.MethodPost, "/content-types", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	typePayload := CreateTypeRequest{
+		UID:  "themes",
+		Name: "Themes",
+		Kind: KindCollection,
+		Fields: []ContentField{
+			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText, Configuration: fields.ValidationRules{Required: true}},
+			{Name: "Primary", FieldKey: "primary", FieldType: fields.FieldType("color_hex"), Configuration: fields.ValidationRules{Required: true}},
+			{Name: "Badge", FieldKey: "badge", FieldType: fields.TypeComponent, Configuration: fields.ValidationRules{Component: "shared.badge"}},
+		},
+	}
+	body, _ = json.Marshal(typePayload)
+	req = httptest.NewRequest(http.MethodPost, "/content-types", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// 3. Persist settings.field_order via PUT /content-types/{uid}
+	updatePayload := UpdateTypeRequest{
+		Name: "Themes",
+		Settings: map[string]any{
+			"field_order": []string{"primary", "title", "badge"},
+		},
+	}
+	body, _ = json.Marshal(updatePayload)
+	req = httptest.NewRequest(http.MethodPut, "/content-types/themes", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/content-types/themes", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var fetched ContentType
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &fetched))
+	assert.Equal(t, []any{"primary", "title", "badge"}, fetched.Settings["field_order"])
+
+	// 4. Structured field error JSON for invalid custom field value
+	badEntry := map[string]any{"title": "Dark", "primary": "blue"}
+	body, _ = json.Marshal(badEntry)
+	req = httptest.NewRequest(http.MethodPost, "/content/themes", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Equal(t, "primary", errResp["field"])
+	fieldErrs, ok := errResp["fields"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, fieldErrs["primary"], "hex color")
+
+	// 5. Structured nested component field error JSON
+	badCompEntry := map[string]any{"title": "Dark", "primary": "#112233", "badge": map[string]any{}}
+	body, _ = json.Marshal(badCompEntry)
+	req = httptest.NewRequest(http.MethodPost, "/content/themes", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	errResp = nil
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Equal(t, "badge.label", errResp["field"])
+	fieldErrs, ok = errResp["fields"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, fieldErrs["badge.label"], "required")
+
+	// 6. Valid entry succeeds
+	goodEntry := map[string]any{
+		"title":   "Ocean",
+		"primary": "#0284c7",
+		"badge":   map[string]any{"label": "New"},
+	}
+	body, _ = json.Marshal(goodEntry)
+	req = httptest.NewRequest(http.MethodPost, "/content/themes", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
 }

@@ -180,3 +180,52 @@ func TestManager_FailureScenarios(t *testing.T) {
 	assert.Equal(t, plugins.StatusError, entity.Status)
 	assert.Contains(t, entity.ErrorMsg, "start failure")
 }
+
+type customFieldPlugin struct {
+	pluginsdk.BasePlugin
+}
+
+func (c *customFieldPlugin) Manifest() pluginsdk.Manifest {
+	return pluginsdk.Manifest{
+		ID:      "custom-field-plugin",
+		Name:    "Custom Field Plugin",
+		Version: "1.0.0",
+	}
+}
+
+func (c *customFieldPlugin) Init(ctx context.Context, host pluginsdk.Host) error {
+	c.Host = host
+	return host.RegisterFieldType("color_hex", func(val any) error {
+		s, ok := val.(string)
+		if !ok || len(s) != 7 || s[0] != '#' {
+			return assert.AnError
+		}
+		return nil
+	})
+}
+
+func (c *customFieldPlugin) Start(ctx context.Context) error { return nil }
+func (c *customFieldPlugin) Stop(ctx context.Context) error  { return nil }
+
+func TestManager_CustomFieldRegistrationLifecycle(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	fieldReg := fields.NewRegistry()
+	mgr := plugins.NewManager(t.TempDir(), content.NewEventBus(), fieldReg, nil, logger)
+
+	require.NoError(t, mgr.RegisterNative(&customFieldPlugin{}))
+	require.NoError(t, mgr.Enable(t.Context(), "custom-field-plugin"))
+
+	descs := fieldReg.CustomFields()
+	require.Len(t, descs, 1)
+	assert.Equal(t, fields.FieldType("color_hex"), descs[0].Type)
+	assert.Equal(t, "custom-field-plugin", descs[0].PluginSlug)
+	assert.Equal(t, "Custom Field Plugin", descs[0].PluginName)
+
+	def := fields.FieldDefinition{Name: "accent", Type: fields.FieldType("color_hex")}
+	assert.NoError(t, fieldReg.ValidateField(def, "#ff5500"))
+	assert.Error(t, fieldReg.ValidateField(def, "not-hex"))
+
+	require.NoError(t, mgr.Disable(t.Context(), "custom-field-plugin"))
+	assert.Empty(t, fieldReg.CustomFields())
+	assert.False(t, fieldReg.IsValid(fields.FieldType("color_hex")))
+}
