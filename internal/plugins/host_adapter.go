@@ -29,6 +29,14 @@ type HostAdapter struct {
 	db         interfaces.Database
 	settings   map[string]any
 	onSettings func(key string, val any)
+	onAudit    func(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any)
+}
+
+// SetAuditRecorder configures the unified host audit recorder callback.
+func (h *HostAdapter) SetAuditRecorder(fn func(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onAudit = fn
 }
 
 // SetPluginName records the display name used when registering plugin metadata.
@@ -156,8 +164,17 @@ func (h *HostAdapter) SetSetting(key string, val any) error {
 	return nil
 }
 
-// RecordAuditLog writes an audit log entry to the database if an SQL database is connected.
+// RecordAuditLog routes plugin audit events through the core audit pipeline when configured,
+// falling back to direct SQL persistence when no host recorder is attached.
 func (h *HostAdapter) RecordAuditLog(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any) {
+	h.mu.RLock()
+	recorder := h.onAudit
+	h.mu.RUnlock()
+	if recorder != nil {
+		recorder(ctx, action, resourceType, resourceID, metadata)
+		return
+	}
+
 	sqlDB, ok := h.db.(interfaces.SQLDatabase)
 	if !ok || sqlDB == nil {
 		h.logger.Info("Audit Log Recorded (no SQL DB)", "action", action, "resource_type", resourceType, "resource_id", resourceID)
@@ -165,14 +182,14 @@ func (h *HostAdapter) RecordAuditLog(ctx context.Context, action, resourceType, 
 	}
 
 	metaJSON, _ := json.Marshal(metadata)
-	query := "INSERT INTO cms_audit_logs (id, user_id, action, resource_type, resource_id, metadata, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+	query := "INSERT INTO cms_audit_logs (id, user_id, actor_type, action, resource_type, resource_id, metadata, ip_address, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 	if sqlDB.DriverName() == "postgres" {
-		query = "INSERT INTO cms_audit_logs (id, user_id, action, resource_type, resource_id, metadata, ip_address, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+		query = "INSERT INTO cms_audit_logs (id, user_id, actor_type, action, resource_type, resource_id, metadata, ip_address, result, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
 	}
 
 	logID := uuid.New().String()
 	now := time.Now().UTC()
-	_, err := sqlDB.ExecContext(ctx, query, logID, "system", action, resourceType, resourceID, string(metaJSON), "127.0.0.1", now)
+	_, err := sqlDB.ExecContext(ctx, query, logID, "system", "plugin", action, resourceType, resourceID, string(metaJSON), "127.0.0.1", "success", now)
 	if err != nil {
 		h.logger.Warn("Failed to persist audit log", "error", err)
 	}

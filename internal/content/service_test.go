@@ -293,3 +293,69 @@ func TestService_EntryOwnershipAndSecretPersistence(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEntryNotFound)
 	assert.ErrorIs(t, svc.DeleteEntry(ctx, "second", entry.ID, false, "user-2"), ErrEntryNotFound)
 }
+
+func TestService_MediaAllowedTypesAcceptsHLSUnderVideo(t *testing.T) {
+	svc, _ := setupTestContentService(t)
+	ctx := context.Background()
+	svc.SetMediaLookup(func(_ context.Context, id string) (string, error) {
+		switch id {
+		case "hls-1":
+			return "application/vnd.apple.mpegurl", nil
+		case "hls-2":
+			return "application/x-mpegurl", nil
+		case "png-1":
+			return "image/png", nil
+		case "pdf-1":
+			return "application/pdf", nil
+		default:
+			return "", ErrEntryNotFound
+		}
+	})
+
+	_, err := svc.CreateContentType(ctx, CreateTypeRequest{
+		UID:  "videos",
+		Name: "Videos",
+		Kind: KindCollection,
+		Fields: []ContentField{
+			{
+				Name:      "Clip",
+				FieldKey:  "clip",
+				FieldType: fields.TypeMedia,
+				Configuration: fields.ValidationRules{
+					Multiple:     true,
+					AllowedTypes: []string{"image", "video"},
+				},
+			},
+			{
+				Name:      "Attachments",
+				FieldKey:  "attachments",
+				FieldType: fields.TypeMedia,
+				Configuration: fields.ValidationRules{
+					AllowedTypes: []string{"file"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	entry, err := svc.CreateEntry(ctx, "videos", map[string]any{
+		"clip":        []any{"hls-1", "hls-2", "png-1"},
+		"attachments": "pdf-1",
+	}, "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, []any{"hls-1", "hls-2", "png-1"}, entry.DraftData["clip"])
+
+	_, err = svc.CreateEntry(ctx, "videos", map[string]any{
+		"clip":        []any{"pdf-1"},
+		"attachments": "pdf-1",
+	}, "user-1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "disallowed MIME type")
+
+	_, err = svc.CreateEntry(ctx, "videos", map[string]any{
+		"clip":        []any{"png-1"},
+		"attachments": "hls-1",
+	}, "user-1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "disallowed MIME type")
+}

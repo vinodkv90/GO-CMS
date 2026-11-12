@@ -269,3 +269,27 @@ func (p *Provider) DeletePrefix(ctx context.Context, prefix string) error {
 
 	return nil
 }
+
+// CheckHealth verifies the configured local uploads directory exists and is writable.
+func (p *Provider) CheckHealth(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	info, err := os.Stat(p.baseDir)
+	if err != nil {
+		return fmt.Errorf("local storage directory unavailable: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("local storage path is not a directory: %s", p.baseDir)
+	}
+	f, err := os.CreateTemp(p.baseDir, ".cms_healthcheck_*")
+	if err != nil {
+		return fmt.Errorf("local storage directory not writable: %w", err)
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return nil
+}

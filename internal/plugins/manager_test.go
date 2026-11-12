@@ -229,3 +229,28 @@ func TestManager_CustomFieldRegistrationLifecycle(t *testing.T) {
 	assert.Empty(t, fieldReg.CustomFields())
 	assert.False(t, fieldReg.IsValid(fields.FieldType("color_hex")))
 }
+
+func TestManager_AuditRecorderForwarding(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	fieldReg := fields.NewRegistry()
+	mgr := plugins.NewManager(t.TempDir(), content.NewEventBus(), fieldReg, nil, logger)
+
+	p := &customFieldPlugin{}
+	require.NoError(t, mgr.RegisterNative(p))
+	require.NoError(t, mgr.Enable(t.Context(), "custom-field-plugin"))
+
+	var capturedAction, capturedRes, capturedID string
+	var capturedMeta map[string]any
+	mgr.SetAuditRecorder(func(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any) {
+		capturedAction = action
+		capturedRes = resourceType
+		capturedID = resourceID
+		capturedMeta = metadata
+	})
+
+	p.Host.RecordAuditLog(t.Context(), "plugin.scan", "content_entry", "e-42", map[string]any{"score": 95})
+	assert.Equal(t, "plugin.scan", capturedAction)
+	assert.Equal(t, "content_entry", capturedRes)
+	assert.Equal(t, "e-42", capturedID)
+	assert.Equal(t, 95, capturedMeta["score"])
+}

@@ -22,13 +22,21 @@ import (
 
 // Renderer coordinates template compiling, caching, and HTML response generation.
 type Renderer struct {
-	mu           sync.RWMutex
-	cfg          *config.Config
-	themeMgr     *themes.Manager
-	contentSvc   *content.Service
-	logger       *slog.Logger
-	cache        map[string]*template.Template
-	cacheEnabled bool
+	mu               sync.RWMutex
+	cfg              *config.Config
+	themeMgr         *themes.Manager
+	contentSvc       *content.Service
+	siteInfoProvider func() SiteInfo
+	logger           *slog.Logger
+	cache            map[string]*template.Template
+	cacheEnabled     bool
+}
+
+// SetSiteInfoProvider sets a dynamic callback supplying live public site metadata.
+func (r *Renderer) SetSiteInfoProvider(fn func() SiteInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.siteInfoProvider = fn
 }
 
 // NewRenderer creates a new HTML template renderer.
@@ -581,6 +589,22 @@ func (r *Renderer) renderError(w http.ResponseWriter, status int, msg string) {
 }
 
 func (r *Renderer) buildSiteInfo() SiteInfo {
+	r.mu.RLock()
+	provider := r.siteInfoProvider
+	r.mu.RUnlock()
+	if provider != nil {
+		info := provider()
+		if info.Title == "" {
+			info.Title = "Go CMS"
+		}
+		if info.BaseURL == "" {
+			info.BaseURL = fmt.Sprintf("http://%s:%d", r.cfg.Server.Host, r.cfg.Server.Port)
+		}
+		if info.Language == "" {
+			info.Language = "en"
+		}
+		return info
+	}
 	return SiteInfo{
 		Title:    "Go CMS",
 		Tagline:  "Modern Extensible CMS Built in Go",
@@ -597,5 +621,5 @@ func canPreview(r *http.Request) bool {
 	if user == nil {
 		return false
 	}
-	return auth.HasPermission(user, "read", "content")
+	return auth.RequestHasPermission(r.Context(), "read", "content")
 }

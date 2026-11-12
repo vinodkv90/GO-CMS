@@ -1,13 +1,15 @@
 import React from 'react';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
-import type { User, ContentType } from '../../types';
+import type { ContentType, PublicGeneralSettings, User } from '../../types';
 
 export interface LayoutProps {
   user: User | null;
   currentTab: string;
   onSelectTab: (tab: string, param?: string) => void;
   contentTypes: ContentType[];
+  publicSettings?: PublicGeneralSettings | null;
+  sidebarCollapsed?: boolean;
   onLogout: () => void;
   pageTitle: string;
   fullBleed?: boolean;
@@ -19,6 +21,8 @@ export const Layout: React.FC<LayoutProps> = ({
   currentTab,
   onSelectTab,
   contentTypes,
+  publicSettings,
+  sidebarCollapsed = false,
   onLogout,
   pageTitle,
   fullBleed = false,
@@ -30,10 +34,13 @@ export const Layout: React.FC<LayoutProps> = ({
         currentTab={currentTab}
         onSelectTab={onSelectTab}
         contentTypes={contentTypes}
+        user={user}
+        publicSettings={publicSettings}
+        collapsed={sidebarCollapsed}
         onLogout={onLogout}
       />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <Topbar user={user} pageTitle={pageTitle} />
+        <Topbar user={user} pageTitle={pageTitle} onSelectTab={onSelectTab} onLogout={onLogout} />
         <main className={`flex-1 ${fullBleed ? 'overflow-hidden flex flex-col' : 'overflow-y-auto p-8'}`}>
           {fullBleed ? (
             children

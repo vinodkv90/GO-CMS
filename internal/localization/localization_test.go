@@ -145,3 +145,50 @@ func TestHTTPHandler_Endpoints(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestService_UpdateFallbackAndDeleteInUseGuard(t *testing.T) {
+	svc := NewService()
+	_, err := svc.Add(Locale{Code: "es", Name: "Spanish", NativeName: "Español", FallbackCode: "en"})
+	require.NoError(t, err)
+
+	// Cannot disable the default locale
+	disable := false
+	_, err = svc.Update("en", LocaleUpdate{IsEnabled: &disable})
+	assert.ErrorContains(t, err, "cannot disable the default locale")
+
+	// Update non-default locale metadata & chain fallback
+	native := "Español (ES)"
+	updated, err := svc.Update("es", LocaleUpdate{NativeName: &native, IsEnabled: &disable})
+	require.NoError(t, err)
+	assert.Equal(t, "Español (ES)", updated.NativeName)
+	assert.False(t, updated.IsEnabled)
+
+	// Guard against deleting a locale in use by content entries
+	inUse := true
+	svc.SetInUseChecker(func(_ context.Context, code string) (bool, error) {
+		return code == "es" && inUse, nil
+	})
+	err = svc.Delete("es")
+	require.ErrorIs(t, err, ErrLocaleInUse)
+
+	// Verify HTTP handler returns 409 Conflict when in use
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			admin := &auth.User{ID: "admin-1", Status: auth.StatusActive, Roles: []auth.Role{{Slug: auth.RoleSuperAdmin}}}
+			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), auth.UserContextKey, admin)))
+		})
+	})
+	NewHTTPHandler(svc).RegisterRoutes(r)
+
+	req := httptest.NewRequest(http.MethodDelete, "/locales/es", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	inUse = false
+	req = httptest.NewRequest(http.MethodDelete, "/locales/es", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}

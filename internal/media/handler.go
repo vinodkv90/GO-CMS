@@ -94,6 +94,10 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	asset, err := h.svc.Upload(r.Context(), file, header.Filename, header.Size, altText, caption, folderID)
 	if err != nil {
+		if errors.Is(err, ErrMediaValidation) || errors.Is(err, ErrFolderNotFound) {
+			h.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		h.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -289,10 +293,10 @@ func (h *Handler) GetSignedURL(w http.ResponseWriter, r *http.Request) {
 	ttlSeconds, _ := strconv.Atoi(r.URL.Query().Get("ttl"))
 	ttl := time.Duration(ttlSeconds) * time.Second
 	if ttl <= 0 {
-		ttl = 1 * time.Hour
+		ttl = h.svc.DefaultSignedURLTTL(r.Context())
 	}
 	if ttl > maxSignedURLTTL {
-		h.writeError(w, http.StatusBadRequest, "signed URL TTL cannot exceed 24 hours")
+		h.writeError(w, http.StatusBadRequest, "signed URL TTL cannot exceed 7 days")
 		return
 	}
 
@@ -539,7 +543,7 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If signed URLs are enabled, verify HMAC signature
-	if h.cfg != nil && h.cfg.Media.SignedURLs.Enabled && h.svc.Signer() != nil {
+	if h.svc.ShouldRequireSignedURLs(r.Context()) && h.svc.Signer() != nil {
 		if err := h.svc.Signer().VerifyURLForTenant(r.URL, tenantID); err != nil {
 			if errors.Is(err, storage.ErrSignatureExpired) {
 				http.Error(w, "Access Denied: Signed URL has expired", http.StatusForbidden)
@@ -575,7 +579,7 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if h.cfg != nil && h.cfg.Media.SignedURLs.Enabled && r.URL.RawQuery != "" {
+		if h.svc.ShouldRequireSignedURLs(r.Context()) && r.URL.RawQuery != "" {
 			if expires, err := strconv.ParseInt(r.URL.Query().Get("expires"), 10, 64); err == nil {
 				content = RewriteHLSPlaylistWithPathSignedParams(content, "/uploads/"+key, time.Unix(expires, 0), h.svc.Signer(), tenantID)
 			}

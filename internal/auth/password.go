@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -16,6 +17,67 @@ var (
 	ErrIncompatibleVersion = errors.New("incompatible version of argon2")
 	ErrWeakPassword        = errors.New("password does not meet security requirements")
 )
+
+// PasswordPolicy defines configurable password complexity and age requirements.
+type PasswordPolicy struct {
+	MinLength        int
+	RequireUppercase bool
+	RequireLowercase bool
+	RequireNumber    bool
+	RequireSpecial   bool
+	MaxAgeDays       int
+}
+
+// DefaultPasswordPolicy returns the standard baseline password policy.
+func DefaultPasswordPolicy() PasswordPolicy {
+	return PasswordPolicy{
+		MinLength:        8,
+		RequireUppercase: true,
+		RequireLowercase: true,
+		RequireNumber:    true,
+		RequireSpecial:   false,
+		MaxAgeDays:       0,
+	}
+}
+
+// ValidatePasswordWithPolicy validates a password against an explicit PasswordPolicy.
+func ValidatePasswordWithPolicy(password string, policy PasswordPolicy) error {
+	minLen := policy.MinLength
+	if minLen < 8 {
+		minLen = 8
+	}
+	if len(password) < minLen {
+		return fmt.Errorf("%w: must be at least %d characters long", ErrWeakPassword, minLen)
+	}
+
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, r := range password {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		case !unicode.IsSpace(r):
+			hasSpecial = true
+		}
+	}
+
+	if policy.RequireUppercase && !hasUpper {
+		return fmt.Errorf("%w: must include at least one uppercase letter", ErrWeakPassword)
+	}
+	if policy.RequireLowercase && !hasLower {
+		return fmt.Errorf("%w: must include at least one lowercase letter", ErrWeakPassword)
+	}
+	if policy.RequireNumber && !hasDigit {
+		return fmt.Errorf("%w: must include at least one numeric digit", ErrWeakPassword)
+	}
+	if policy.RequireSpecial && !hasSpecial {
+		return fmt.Errorf("%w: must include at least one special character", ErrWeakPassword)
+	}
+	return nil
+}
 
 // Argon2Params holds the configuration parameters for Argon2id hashing.
 type Argon2Params struct {

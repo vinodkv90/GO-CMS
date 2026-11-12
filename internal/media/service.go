@@ -21,15 +21,31 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxSignedURLTTL = 24 * time.Hour
+const maxSignedURLTTL = 7 * 24 * time.Hour
+
+// RuntimeConfig holds dynamically enforced media upload, thumbnail, and URL settings.
+type RuntimeConfig struct {
+	MaxFileSizeBytes       int64
+	AllowedMIMETypes       []string
+	ResponsiveSizesEnabled bool
+	GenerateSmall          bool
+	GenerateMedium         bool
+	GenerateLarge          bool
+	RequireAltText         bool
+	DefaultFolderID        *string
+	DefaultAccess          string // "public" or "signed"
+	SignedURLTTLSeconds    int
+}
 
 // Service orchestrates media upload processing, metadata inspection, storage, and retrieval.
 type Service struct {
-	repo    Repository
-	storage storage.StorageProvider
-	signer  *storage.URLSigner
-	cfg     *config.Config
-	logger  *slog.Logger
+	repo             Repository
+	storage          storage.StorageProvider
+	signer           *storage.URLSigner
+	cfg              *config.Config
+	logger           *slog.Logger
+	mu               sync.RWMutex
+	settingsProvider func(context.Context) (RuntimeConfig, error)
 }
 
 // NewService creates a new media service instance.
@@ -43,10 +59,25 @@ func NewService(
 		logger = slog.Default()
 	}
 
-	var signer *storage.URLSigner
-	if cfg != nil && cfg.Media.SignedURLs.Enabled {
-		signer = storage.NewURLSigner(cfg.Media.SignedURLs.SecretKey, cfg.Media.SignedURLs.Expiration)
+	var signingSecret string
+	var defaultTTL time.Duration
+	if cfg != nil {
+		signingSecret = cfg.Media.SignedURLs.SecretKey
+		if signingSecret == "" {
+			signingSecret = cfg.Auth.SessionSecret
+		}
+		if signingSecret == "" {
+			signingSecret = cfg.Auth.JWTSecret
+		}
+		defaultTTL = cfg.Media.SignedURLs.Expiration
 	}
+	if signingSecret == "" {
+		signingSecret = "cms-media-signing-fallback"
+	}
+	if defaultTTL <= 0 {
+		defaultTTL = time.Hour
+	}
+	signer := storage.NewURLSigner(signingSecret, defaultTTL)
 
 	return &Service{
 		repo:    repo,
@@ -55,6 +86,110 @@ func NewService(
 		cfg:     cfg,
 		logger:  logger,
 	}
+}
+
+// SetMediaSettingsProvider registers a callback returning live media policies from Settings.
+func (s *Service) SetMediaSettingsProvider(fn func(context.Context) (RuntimeConfig, error)) {
+	s.mu.Lock()
+	s.settingsProvider = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) currentRuntimeConfig(ctx context.Context) RuntimeConfig {
+	defaultAccess := "public"
+	ttlSec := 3600
+	if s.cfg != nil {
+		if s.cfg.Media.SignedURLs.Enabled {
+			defaultAccess = "signed"
+		}
+		if s.cfg.Media.SignedURLs.Expiration > 0 {
+			ttlSec = int(s.cfg.Media.SignedURLs.Expiration.Seconds())
+		}
+	}
+	def := RuntimeConfig{
+		MaxFileSizeBytes:       50 << 20,
+		ResponsiveSizesEnabled: true,
+		GenerateSmall:          true,
+		DefaultAccess:          defaultAccess,
+		SignedURLTTLSeconds:    ttlSec,
+	}
+	s.mu.RLock()
+	fn := s.settingsProvider
+	s.mu.RUnlock()
+	if fn == nil {
+		return def
+	}
+	rt, err := fn(ctx)
+	if err != nil {
+		return def
+	}
+	if rt.MaxFileSizeBytes <= 0 {
+		rt.MaxFileSizeBytes = def.MaxFileSizeBytes
+	}
+	if rt.DefaultAccess == "" {
+		rt.DefaultAccess = def.DefaultAccess
+	}
+	if rt.SignedURLTTLSeconds <= 0 {
+		rt.SignedURLTTLSeconds = def.SignedURLTTLSeconds
+	}
+	return rt
+}
+
+// MaxUploadRequestBodyBytes returns the configured max upload byte size plus 2MB multipart overhead.
+func (s *Service) MaxUploadRequestBodyBytes(ctx context.Context) int64 {
+	rt := s.currentRuntimeConfig(ctx)
+	limit := rt.MaxFileSizeBytes + (2 << 20)
+	if limit < (32 << 20) {
+		return 32 << 20
+	}
+	return limit
+}
+
+// ShouldRequireSignedURLs reports whether signed URLs are enforced for asset URLs and file serving.
+func (s *Service) ShouldRequireSignedURLs(ctx context.Context) bool {
+	if s.signer == nil {
+		return false
+	}
+	return strings.EqualFold(s.currentRuntimeConfig(ctx).DefaultAccess, "signed")
+}
+
+// DefaultSignedURLTTL returns the configured default signed URL lifetime bounded by maxSignedURLTTL.
+func (s *Service) DefaultSignedURLTTL(ctx context.Context) time.Duration {
+	sec := s.currentRuntimeConfig(ctx).SignedURLTTLSeconds
+	if sec <= 0 {
+		return time.Hour
+	}
+	ttl := time.Duration(sec) * time.Second
+	if ttl > maxSignedURLTTL {
+		return maxSignedURLTTL
+	}
+	return ttl
+}
+
+func matchesAllowedMIME(actual string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(strings.Split(actual, ";")[0]))
+	if base == "" {
+		return false
+	}
+	actualParts := strings.SplitN(base, "/", 2)
+	for _, pat := range allowed {
+		p := strings.ToLower(strings.TrimSpace(pat))
+		if p == "" {
+			continue
+		}
+		if p == "*/*" || p == base {
+			return true
+		}
+		if strings.HasSuffix(p, "/*") && len(actualParts) == 2 {
+			if strings.TrimSuffix(p, "/*") == actualParts[0] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Storage returns the underlying storage provider.
@@ -79,21 +214,40 @@ func (s *Service) Upload(
 	caption string,
 	folderID ...*string,
 ) (*MediaAsset, error) {
-	// Read file into memory (or buffer) to allow MIME sniffing and multiple passes
-	data, err := io.ReadAll(r)
+	rt := s.currentRuntimeConfig(ctx)
+	maxSize := rt.MaxFileSizeBytes
+	if maxSize <= 0 {
+		maxSize = 50 << 20
+	}
+
+	if rt.RequireAltText && strings.TrimSpace(altText) == "" {
+		return nil, fmt.Errorf("%w: alt_text is required by media library settings", ErrMediaValidation)
+	}
+	if size > maxSize {
+		return nil, fmt.Errorf("%w: uploaded file (%d bytes) exceeds maximum allowed size (%d bytes)", ErrMediaValidation, size, maxSize)
+	}
+
+	// Read bounded payload up to maxSize+1 to enforce real stream size limit before full buffering
+	data, err := io.ReadAll(io.LimitReader(r, maxSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read upload payload: %w", err)
 	}
 
 	actualSize := int64(len(data))
 	if actualSize == 0 {
-		return nil, fmt.Errorf("uploaded file is empty")
+		return nil, fmt.Errorf("%w: uploaded file is empty", ErrMediaValidation)
+	}
+	if actualSize > maxSize {
+		return nil, fmt.Errorf("%w: uploaded file exceeds maximum allowed size (%d bytes)", ErrMediaValidation, maxSize)
 	}
 
-	// 1. Detect MIME type
+	// 1. Detect MIME type & validate against allowlist
 	mimeType, _, err := SniffMIME(bytes.NewReader(data))
 	if err != nil || mimeType == "" {
 		mimeType = "application/octet-stream"
+	}
+	if !matchesAllowedMIME(mimeType, rt.AllowedMIMETypes) {
+		return nil, fmt.Errorf("%w: file MIME type %q is not allowed by media settings", ErrMediaValidation, mimeType)
 	}
 
 	// 2. Sanitize filename and generate storage key
@@ -102,14 +256,23 @@ func (s *Service) Upload(
 	var targetFolderID *string
 	var assetID, storageKey string
 
-	if len(folderID) > 0 && folderID[0] != nil && *folderID[0] != "" {
-		fid := *folderID[0]
+	if len(folderID) > 0 && folderID[0] != nil && strings.TrimSpace(*folderID[0]) != "" {
+		fid := strings.TrimSpace(*folderID[0])
 		folder, err := s.repo.GetFolderByID(ctx, fid)
 		if err != nil {
 			return nil, fmt.Errorf("target folder not found: %w", err)
 		}
 		targetFolderID = &fid
 		assetID, storageKey = GenerateFolderStorageKey(folder.StoragePath, sanitizedName)
+	} else if rt.DefaultFolderID != nil && strings.TrimSpace(*rt.DefaultFolderID) != "" {
+		defFID := strings.TrimSpace(*rt.DefaultFolderID)
+		folder, err := s.repo.GetFolderByID(ctx, defFID)
+		if err == nil && folder != nil {
+			targetFolderID = &folder.ID
+			assetID, storageKey = GenerateFolderStorageKey(folder.StoragePath, sanitizedName)
+		} else {
+			assetID, storageKey = GenerateStorageKey(sanitizedName)
+		}
 	} else {
 		assetID, storageKey = GenerateStorageKey(sanitizedName)
 	}
@@ -129,20 +292,56 @@ func (s *Service) Upload(
 			metadata.Format = format
 		}
 
-		// Generate thumbnail for raster images
-		thumbBytes, tw, th, thumbErr := GenerateThumbnail(bytes.NewReader(data), 250)
-		if thumbErr == nil && len(thumbBytes) > 0 {
-			ext := filepath.Ext(storageKey)
-			thumbKey := strings.TrimSuffix(storageKey, ext) + "_thumb" + ext
-			if saveThumbErr := s.storage.Save(ctx, thumbKey, bytes.NewReader(thumbBytes), int64(len(thumbBytes)), mimeType); saveThumbErr == nil {
-				metadata.Thumbnails["small"] = thumbKey
-				s.logger.Debug("Generated thumbnail for media asset", "asset_id", assetID, "width", tw, "height", th)
+		if rt.ResponsiveSizesEnabled {
+			type thumbSpec struct {
+				name   string
+				maxDim int
+			}
+			var specs []thumbSpec
+			if rt.GenerateSmall {
+				specs = append(specs, thumbSpec{name: "small", maxDim: 250})
+			}
+			if rt.GenerateMedium {
+				specs = append(specs, thumbSpec{name: "medium", maxDim: 500})
+			}
+			if rt.GenerateLarge {
+				specs = append(specs, thumbSpec{name: "large", maxDim: 1000})
+			}
+
+			baseExt := filepath.Ext(storageKey)
+			baseStem := strings.TrimSuffix(storageKey, baseExt)
+			for _, spec := range specs {
+				thumbBytes, tw, th, thumbErr := GenerateThumbnail(bytes.NewReader(data), spec.maxDim)
+				if thumbErr != nil || len(thumbBytes) == 0 {
+					continue
+				}
+				thumbMIME, _, _ := SniffMIME(bytes.NewReader(thumbBytes))
+				thumbExt := ".png"
+				switch thumbMIME {
+				case "image/jpeg":
+					thumbExt = ".jpg"
+				case "image/gif":
+					thumbExt = ".gif"
+				default:
+					if thumbMIME == "" || !strings.HasPrefix(thumbMIME, "image/") {
+						thumbMIME = "image/png"
+					}
+					thumbExt = ".png"
+				}
+				thumbKey := baseStem + "_thumb_" + spec.name + thumbExt
+				if saveThumbErr := s.storage.Save(ctx, thumbKey, bytes.NewReader(thumbBytes), int64(len(thumbBytes)), thumbMIME); saveThumbErr == nil {
+					metadata.Thumbnails[spec.name] = thumbKey
+					s.logger.Debug("Generated thumbnail for media asset", "asset_id", assetID, "size", spec.name, "width", tw, "height", th, "mime", thumbMIME)
+				}
 			}
 		}
 	}
 
 	// 4. Save primary file to storage provider
 	if err := s.storage.Save(ctx, storageKey, bytes.NewReader(data), actualSize, mimeType); err != nil {
+		for _, tk := range metadata.Thumbnails {
+			_ = s.storage.Delete(ctx, tk)
+		}
 		return nil, fmt.Errorf("failed to save file to storage: %w", err)
 	}
 
@@ -163,8 +362,11 @@ func (s *Service) Upload(
 	}
 
 	if err := s.repo.Create(ctx, asset); err != nil {
-		// Cleanup saved file on database failure
+		// Cleanup saved file and thumbnails on database failure
 		_ = s.storage.Delete(ctx, storageKey)
+		for _, tk := range metadata.Thumbnails {
+			_ = s.storage.Delete(ctx, tk)
+		}
 		return nil, fmt.Errorf("failed to save media record in database: %w", err)
 	}
 
@@ -764,8 +966,11 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, recursive bool) e
 
 // GenerateSignedURL generates a temporary HMAC-SHA256 signed access URL for the asset.
 func (s *Service) GenerateSignedURL(ctx context.Context, id string, ttl time.Duration) (string, error) {
-	if ttl <= 0 || ttl > maxSignedURLTTL {
-		return "", fmt.Errorf("signed URL TTL must be between 1 second and 24 hours")
+	if ttl <= 0 {
+		ttl = s.DefaultSignedURLTTL(ctx)
+	}
+	if ttl > maxSignedURLTTL {
+		return "", fmt.Errorf("%w: signed URL TTL must be between 1 second and 7 days", ErrMediaValidation)
 	}
 	asset, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -795,12 +1000,12 @@ func (s *Service) ResolveURL(ctx context.Context, storageKey string) (string, er
 		return "", err
 	}
 
-	if s.cfg != nil && s.cfg.Media.SignedURLs.Enabled && s.signer != nil {
+	if s.ShouldRequireSignedURLs(ctx) && s.signer != nil {
 		tenantID := ""
 		if tenant := tenancy.GetTenant(ctx); tenant != nil {
 			tenantID = tenant.ID
 		}
-		return s.signer.SignForTenant(rawURL, s.cfg.Media.SignedURLs.Expiration, tenantID)
+		return s.signer.SignForTenant(rawURL, s.DefaultSignedURLTTL(ctx), tenantID)
 	}
 
 	return rawURL, nil

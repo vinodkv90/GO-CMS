@@ -50,6 +50,23 @@ func TestCSRFMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
+	t.Run("POST to /auth/invitations/accept with existing cookie bypasses CSRF", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/invitations/accept", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "stale-session-token"})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("Cookie-authenticated request with non-Bearer Authorization still requires CSRF", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/content", nil)
+		req.Header.Set("Authorization", "Basic dummy-value")
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "valid-session-token"})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
 	t.Run("Cookie-authenticated state-changing request blocked without valid CSRF", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/content", nil)
 		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "valid-session-token"})

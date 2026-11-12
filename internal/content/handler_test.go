@@ -2,6 +2,7 @@ package content
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -306,4 +307,105 @@ func TestContentHTTP_CustomFieldsSettingsOrderAndFieldErrors(t *testing.T) {
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
+}
+
+func TestContentHTTP_RestAPISettingsEnforcement(t *testing.T) {
+	authRepo := auth.NewMemoryAuthRepository()
+	cfg := config.DefaultConfig()
+	cfg.Auth.JWTSecret = "jwt-secret-rest-enforce"
+	aSvc := auth.NewService(authRepo, authRepo, authRepo, authRepo, cfg, nil)
+	_, err := aSvc.SeedDefaultRolesAndAdmin(t.Context(), "admin", "admin@cms.test", "Admin1234!")
+	require.NoError(t, err)
+	_, aTok, err := aSvc.Authenticate(t.Context(), "admin", "Admin1234!")
+	require.NoError(t, err)
+
+	contentRepo := NewMemoryContentRepository()
+	svc := NewService(contentRepo, contentRepo, contentRepo, fields.NewRegistry(), NewEventBus(), nil)
+	h := NewHandler(svc)
+	liveCfg := RestAPIRuntimeConfig{
+		DefaultLimit:       1,
+		MaxLimit:           2,
+		WithCount:          false,
+		MaxPopulateDepth:   1,
+		ExposeDraftPreview: false,
+	}
+	h.SetRestAPISettingsProvider(func(context.Context) RestAPIRuntimeConfig {
+		return liveCfg
+	})
+
+	r := chi.NewRouter()
+	r.Use(auth.AuthMiddleware(aSvc))
+	h.RegisterRoutes(r)
+
+	// Create content type + 2 published items + 1 draft item
+	typePayload := CreateTypeRequest{
+		UID:  "item",
+		Name: "Items",
+		Kind: KindCollection,
+		Fields: []ContentField{
+			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
+		},
+	}
+	ctBytes, _ := json.Marshal(typePayload)
+	req := httptest.NewRequest(http.MethodPost, "/content-types", bytes.NewReader(ctBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+aTok)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	for i := 1; i <= 3; i++ {
+		eb, _ := json.Marshal(map[string]any{"title": fmt.Sprintf("Item %d", i)})
+		creReq := httptest.NewRequest(http.MethodPost, "/content/item", bytes.NewReader(eb))
+		creReq.Header.Set("Content-Type", "application/json")
+		creReq.Header.Set("Authorization", "Bearer "+aTok)
+		cw := httptest.NewRecorder()
+		r.ServeHTTP(cw, creReq)
+		require.Equal(t, http.StatusCreated, cw.Code)
+
+		var created map[string]any
+		require.NoError(t, json.Unmarshal(cw.Body.Bytes(), &created))
+		id := created["id"].(string)
+		if i < 3 {
+			pubReq := httptest.NewRequest(http.MethodPost, "/content/item/"+id+"/publish", nil)
+			pubReq.Header.Set("Authorization", "Bearer "+aTok)
+			pw := httptest.NewRecorder()
+			r.ServeHTTP(pw, pubReq)
+			require.Equal(t, http.StatusOK, pw.Code)
+		}
+	}
+
+	// 1. DefaultLimit=1, WithCount=false, ExposeDraftPreview=false
+	req = httptest.NewRequest(http.MethodGet, "/content/item?preview=true", nil)
+	req.Header.Set("Authorization", "Bearer "+aTok)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var listResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	assert.Len(t, listResp["data"].([]any), 1)
+	_, hasTotal := listResp["total"]
+	assert.False(t, hasTotal)
+
+	// 2. ?limit=99 capped to MaxLimit=2 (2 published items exist)
+	req = httptest.NewRequest(http.MethodGet, "/content/item?limit=99&preview=true", nil)
+	req.Header.Set("Authorization", "Bearer "+aTok)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	assert.Len(t, listResp["data"].([]any), 2)
+
+	// 3. Re-enabling WithCount & ExposeDraftPreview exposes draft + total immediately
+	liveCfg.WithCount = true
+	liveCfg.ExposeDraftPreview = true
+	liveCfg.MaxLimit = 10
+	req = httptest.NewRequest(http.MethodGet, "/content/item?limit=10&preview=true", nil)
+	req.Header.Set("Authorization", "Bearer "+aTok)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	assert.Len(t, listResp["data"].([]any), 3)
+	assert.Equal(t, float64(3), listResp["total"])
 }

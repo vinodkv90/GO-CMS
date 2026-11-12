@@ -28,14 +28,27 @@ export interface MediaPickerModalProps {
   onConfirm: (selectedAssets: MediaAsset[]) => void;
 }
 
-function matchesAllowedTypes(mimeType: string, allowedTypes: string[]): boolean {
+const HLS_MIME_TYPES = new Set([
+  'application/vnd.apple.mpegurl',
+  'application/x-mpegurl',
+]);
+
+export function isVideoMediaMime(mimeType?: string): boolean {
+  const mime = (mimeType || '').toLowerCase().trim();
+  return mime.startsWith('video/') || HLS_MIME_TYPES.has(mime);
+}
+
+export function matchesAllowedTypes(mimeType: string, allowedTypes: string[]): boolean {
   if (!allowedTypes.length) return true;
-  const mime = (mimeType || '').toLowerCase();
+  const mime = (mimeType || '').toLowerCase().trim();
   return allowedTypes.some((raw) => {
     const rule = raw.toLowerCase().trim();
     if (!rule) return true;
-    if (rule === 'file') {
-      return !mime.startsWith('image/') && !mime.startsWith('video/') && !mime.startsWith('audio/');
+    if (rule === 'image' || rule === 'images') return mime.startsWith('image/');
+    if (rule === 'video' || rule === 'videos') return isVideoMediaMime(mime);
+    if (rule === 'audio' || rule === 'audios') return mime.startsWith('audio/');
+    if (rule === 'file' || rule === 'files') {
+      return !mime.startsWith('image/') && !isVideoMediaMime(mime) && !mime.startsWith('audio/');
     }
     if (rule.endsWith('/*')) return mime.startsWith(rule.slice(0, -1));
     if (rule.endsWith('/')) return mime.startsWith(rule);
@@ -354,7 +367,7 @@ export const MediaPickerModal: React.FC<MediaPickerModalProps> = ({
         />
       );
     }
-    const Icon = asset.mime_type.startsWith('video/') || asset.mime_type.includes('mpegurl')
+    const Icon = isVideoMediaMime(asset.mime_type)
       ? Film
       : asset.mime_type.startsWith('audio/')
         ? FileAudio

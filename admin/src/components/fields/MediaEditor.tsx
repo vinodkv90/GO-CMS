@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { mediaApi } from '../../api/endpoints';
 import type { MediaAsset } from '../../types';
-import { MediaPickerModal } from '../media/MediaPickerModal';
+import { isVideoMediaMime, MediaPickerModal } from '../media/MediaPickerModal';
 import { configFor, moveItem } from './contracts';
 import type { FieldEditorProps } from './contracts';
 
@@ -100,7 +100,7 @@ export function MediaEditor({
           {selected.map((assetId, index) => {
             const asset = assetsById[assetId];
             const isImage = asset?.mime_type?.startsWith('image/');
-            const Icon = asset?.mime_type?.startsWith('video/')
+            const Icon = isVideoMediaMime(asset?.mime_type)
               ? Film
               : asset?.mime_type?.startsWith('audio/')
                 ? FileAudio

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/go-cms/cms/internal/api"
+	"github.com/go-cms/cms/internal/audit"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
@@ -270,16 +271,7 @@ func TestE2E_FullPlatformLifecycle(t *testing.T) {
 	// STEP 9: System Audit Logs Query
 	// =========================================================================
 	// Record an audit log entry
-	_, err = srv.Audit().Record(context.Background(), struct {
-		ActorID   string
-		ActorType string
-		Action    string
-		Resource  string
-		TargetID  string
-		Metadata  map[string]any
-		IPAddress string
-		UserAgent string
-	}{
+	_, err = srv.Audit().Record(context.Background(), audit.RecordParams{
 		ActorID:   "admin",
 		ActorType: "user",
 		Action:    "publish",

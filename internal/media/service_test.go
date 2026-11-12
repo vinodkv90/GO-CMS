@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,4 +182,70 @@ func stringsLastIndex(s, sep string) int {
 		}
 	}
 	return -1
+}
+
+func TestMediaService_SettingsEnforcementAndPNGThumbnailFix(t *testing.T) {
+	svc, _, storageProvider, _ := setupTestMediaService(t, false)
+	ctx := context.Background()
+
+	defaultFolder, err := svc.CreateFolder(ctx, "Default Uploads", nil, nil)
+	require.NoError(t, err)
+
+	rt := media.RuntimeConfig{
+		MaxFileSizeBytes:       20 * 1024, // 20 KB
+		AllowedMIMETypes:       []string{"image/jpeg", "image/png"},
+		ResponsiveSizesEnabled: true,
+		GenerateSmall:          true,
+		GenerateMedium:         true,
+		GenerateLarge:          false,
+		RequireAltText:         true,
+		DefaultFolderID:        &defaultFolder.ID,
+		DefaultAccess:          "signed",
+		SignedURLTTLSeconds:    900,
+	}
+	svc.SetMediaSettingsProvider(func(context.Context) (media.RuntimeConfig, error) {
+		return rt, nil
+	})
+
+	// 1. Missing alt text rejected with ErrMediaValidation
+	jpegData := createTestJPEG(600, 400)
+	_, err = svc.Upload(ctx, bytes.NewReader(jpegData), "photo.jpg", int64(len(jpegData)), "   ", "")
+	assert.ErrorIs(t, err, media.ErrMediaValidation)
+
+	// 2. Disallowed MIME type rejected
+	pdfData := []byte("%PDF-1.4 disallow me")
+	_, err = svc.Upload(ctx, bytes.NewReader(pdfData), "doc.pdf", int64(len(pdfData)), "Document", "")
+	assert.ErrorIs(t, err, media.ErrMediaValidation)
+
+	// 3. Size limit rejected even if declared header size lies smaller than actual stream
+	oversized := bytes.Repeat([]byte("a"), 25*1024)
+	_, err = svc.Upload(ctx, bytes.NewReader(oversized), "huge.png", 100, "Huge", "")
+	assert.ErrorIs(t, err, media.ErrMediaValidation)
+
+	// 4. Valid JPEG upload falls back to default folder, produces PNG thumbnails with .png extension (not .jpg!) & signed URL
+	asset, err := svc.Upload(ctx, bytes.NewReader(jpegData), "photo.jpg", int64(len(jpegData)), "Scenic photo", "")
+	require.NoError(t, err)
+	require.NotNil(t, asset.FolderID)
+	assert.Equal(t, defaultFolder.ID, *asset.FolderID)
+	assert.Contains(t, asset.URL, "signature=")
+
+	smallThumb := asset.Metadata.Thumbnails["small"]
+	mediumThumb := asset.Metadata.Thumbnails["medium"]
+	assert.NotEmpty(t, smallThumb)
+	assert.NotEmpty(t, mediumThumb)
+	assert.Empty(t, asset.Metadata.Thumbnails["large"])
+	assert.True(t, strings.HasSuffix(smallThumb, ".png"), "expected .png extension for PNG-encoded thumbnail, got %q", smallThumb)
+
+	rc, err := storageProvider.Open(ctx, smallThumb)
+	require.NoError(t, err)
+	defer rc.Close()
+	sniffedThumbMIME, _, err := media.SniffMIME(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "image/png", sniffedThumbMIME)
+
+	// 5. Turning ResponsiveSizesEnabled=false skips generating thumbnails
+	rt.ResponsiveSizesEnabled = false
+	assetNoThumb, err := svc.Upload(ctx, bytes.NewReader(jpegData), "plain.jpg", int64(len(jpegData)), "No thumb", "")
+	require.NoError(t, err)
+	assert.Empty(t, assetNoThumb.Metadata.Thumbnails)
 }

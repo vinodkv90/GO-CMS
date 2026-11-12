@@ -45,12 +45,17 @@ func ReadinessHandler(db interfaces.Database) http.HandlerFunc {
 			overall = "not_ready"
 		}
 
+		driverName := ""
+		if db != nil {
+			driverName = db.DriverName()
+		}
+
 		response := map[string]any{
 			"status": overall,
 			"components": map[string]any{
 				"database": map[string]any{
 					"status": dbStatus,
-					"driver": db.DriverName(),
+					"driver": driverName,
 					"error":  dbErr,
 				},
 			},

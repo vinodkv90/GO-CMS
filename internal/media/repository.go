@@ -23,6 +23,9 @@ var (
 
 	// ErrFolderNotEmpty indicates an attempt to delete a folder containing items without recursive authorization.
 	ErrFolderNotEmpty = errors.New("folder contains items; recursive deletion must be explicitly requested")
+
+	// ErrMediaValidation indicates an uploaded media asset violates runtime media settings constraints.
+	ErrMediaValidation = errors.New("media validation failed")
 )
 
 // Repository defines database operations for media asset records and folder hierarchies.

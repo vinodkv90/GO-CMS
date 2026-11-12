@@ -2,9 +2,10 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -19,13 +20,50 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+func auditMetaFromRequest(r *http.Request) AuditMeta {
+	meta := AuditMeta{
+		IP:        r.RemoteAddr,
+		UserAgent: r.UserAgent(),
+	}
+	if u := GetUserFromContext(r.Context()); u != nil {
+		meta.ActorID = u.ID
+		meta.ActorEmail = u.Email
+	}
+	return meta
+}
+
+func mapAuthServiceErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrForbidden), errors.Is(err, ErrIPNotAllowed), errors.Is(err, ErrSSOOnlyAccount), errors.Is(err, ErrPasswordExpired):
+		return http.StatusForbidden
+	case errors.Is(err, ErrUnauthorized), errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrTokenExpired), errors.Is(err, ErrInvalidMFACode):
+		return http.StatusUnauthorized
+	case errors.Is(err, ErrAccountLocked):
+		return http.StatusTooManyRequests
+	case errors.Is(err, ErrUserNotFound), errors.Is(err, ErrRoleNotFound), errors.Is(err, ErrPermissionNotFound), errors.Is(err, ErrInvitationNotFound), errors.Is(err, ErrTokenNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrUserAlreadyExists), errors.Is(err, ErrRoleAlreadyExists), errors.Is(err, ErrLastSuperAdmin), errors.Is(err, ErrRoleInUse), errors.Is(err, ErrSystemRoleProtected), errors.Is(err, ErrInvitationRevoked):
+		return http.StatusConflict
+	case errors.Is(err, ErrInvitationExpired):
+		return http.StatusGone
+	default:
+		return http.StatusBadRequest
+	}
+}
+
 // RegisterRoutes mounts all authentication, user, role, and API token routes.
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	// Public Auth Endpoints
 	r.Group(func(public chi.Router) {
-		public.Post("/auth/login", h.Login)
+		public.Post("/auth/login", h.handleLogin)
 		public.Post("/auth/register", h.Register)
 		public.Post("/auth/logout", h.Logout)
+		public.Post("/auth/mfa/verify", h.VerifyMFALogin)
+		public.Post("/auth/mfa/enroll", h.EnrollMFA)
+		public.Post("/auth/mfa/confirm", h.ConfirmMFA)
+		public.Post("/auth/reset-expired-password", h.ResetExpiredPassword)
+		public.Get("/auth/invitations/preview", h.PreviewInvitation)
+		public.Post("/auth/invitations/accept", h.AcceptInvitation)
 	})
 
 	// Protected Endpoints
@@ -34,21 +72,49 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 		// Current User
 		protected.Get("/auth/me", h.Me)
+		protected.Patch("/auth/me", h.UpdateMe)
+		protected.Post("/auth/change-password", h.ChangePassword)
+		protected.Post("/auth/mfa/disable", h.DisableMFA)
+		protected.Post("/auth/mfa/regenerate-recovery-codes", h.RegenerateRecoveryCodes)
+
+		// Admin Invitations
+		protected.With(RequirePermission("read", "users")).Get("/users/invitations", h.ListInvitations)
+		protected.With(RequirePermission("create", "users")).Post("/users/invitations", h.CreateInvitation)
+		protected.With(RequirePermission("create", "users")).Post("/users/invitations/{id}/resend", h.ResendInvitation)
+		protected.With(RequirePermission("update", "users")).Post("/users/invitations/{id}/revoke", h.RevokeInvitation)
+		protected.With(RequirePermission("delete", "users")).Delete("/users/invitations/{id}", h.DeleteInvitation)
 
 		// User Management
 		protected.With(RequirePermission("read", "users")).Get("/users", h.ListUsers)
 		protected.With(RequirePermission("create", "users")).Post("/users", h.CreateUser)
 		protected.Get("/users/{id}", h.GetUser)
 		protected.Patch("/users/{id}", h.UpdateUser)
+		protected.With(RequirePermission("update", "users")).Post("/users/{id}/activate", h.ActivateUser)
+		protected.With(RequirePermission("update", "users")).Post("/users/{id}/deactivate", h.DeactivateUser)
+		protected.With(RequirePermission("update", "users")).Post("/users/{id}/unlock", h.UnlockUser)
 		protected.With(RequirePermission("delete", "users")).Delete("/users/{id}", h.DeleteUser)
 
-		// Roles
+		// Roles & Permissions
 		protected.With(RequirePermission("read", "roles")).Get("/roles", h.ListRoles)
+		protected.With(RequirePermission("read", "roles")).Get("/roles/{id}", h.GetRole)
+		protected.With(RequirePermission("create", "roles")).Post("/roles", h.CreateRole)
+		protected.With(RequirePermission("update", "roles")).Put("/roles/{id}", h.UpdateRole)
+		protected.With(RequirePermission("create", "roles")).Post("/roles/{id}/duplicate", h.DuplicateRole)
+		protected.With(RequirePermission("delete", "roles")).Delete("/roles/{id}", h.DeleteRole)
+		protected.With(RequirePermission("read", "roles")).Get("/permissions", h.ListPermissions)
 
-		// API Tokens
-		protected.Post("/api-tokens", h.CreateAPIToken)
-		protected.Get("/api-tokens", h.ListAPITokens)
-		protected.Delete("/api-tokens/{id}", h.RevokeAPIToken)
+		// API, Admin & Transfer Tokens
+		protected.With(RequirePermission("create", "api_tokens")).Post("/api-tokens", h.CreateAPIToken)
+		protected.With(RequirePermission("read", "api_tokens")).Get("/api-tokens", h.ListAPITokens)
+		protected.With(RequirePermission("create", "api_tokens")).Post("/api-tokens/{id}/rotate", h.RotateAPIToken)
+		protected.With(RequirePermission("delete", "api_tokens")).Post("/api-tokens/{id}/revoke", h.RevokeAPIToken)
+		protected.With(RequirePermission("delete", "api_tokens")).Delete("/api-tokens/{id}", h.DeleteAPIToken)
+
+		protected.With(RequirePermission("create", "api_tokens")).Post("/transfer-tokens", h.CreateTransferToken)
+		protected.With(RequirePermission("read", "api_tokens")).Get("/transfer-tokens", h.ListTransferTokens)
+		protected.With(RequirePermission("create", "api_tokens")).Post("/transfer-tokens/{id}/rotate", h.RotateAPIToken)
+		protected.With(RequirePermission("delete", "api_tokens")).Post("/transfer-tokens/{id}/revoke", h.RevokeAPIToken)
+		protected.With(RequirePermission("delete", "api_tokens")).Delete("/transfer-tokens/{id}", h.DeleteAPIToken)
 	})
 }
 
@@ -123,12 +189,70 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, user)
 }
 
-// ListUsers returns a paginated list of users.
+// UpdateMe updates the currently authenticated user's profile fields.
+func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if GetAPITokenFromContext(r.Context()) != nil {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "api tokens cannot modify user profiles"})
+		return
+	}
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	updated, err := h.svc.UpdateProfile(r.Context(), user.ID, req)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// ChangePassword allows the currently authenticated user to change their own password.
+func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if GetAPITokenFromContext(r.Context()) != nil {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "api tokens cannot change passwords"})
+		return
+	}
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := h.svc.ChangePassword(r.Context(), user.ID, req); err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "current password is incorrect" {
+			status = http.StatusUnauthorized
+		}
+		respondJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "password updated successfully"})
+}
+
+// ListUsers returns a filtered, paginated list of users.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
-	users, total, err := h.svc.ListUsers(r.Context(), limit, offset)
+	filter := UserListFilter{
+		Search: r.URL.Query().Get("search"),
+		Status: r.URL.Query().Get("status"),
+		RoleID: r.URL.Query().Get("role_id"),
+		Limit:  limit,
+		Offset: offset,
+	}
+	users, total, err := h.svc.ListUsersFiltered(r.Context(), filter)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -140,17 +264,18 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CreateUser creates a new user (admin endpoint).
+// CreateUser creates a new user with optional roles and status (admin endpoint).
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
+	currentUser := GetUserFromContext(r.Context())
+	var req CreateAdminUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 
-	user, err := h.svc.Register(r.Context(), req)
+	user, err := h.svc.CreateAdminUser(r.Context(), currentUser, req, auditMetaFromRequest(r))
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -161,6 +286,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "id")
 	currentUser := GetUserFromContext(r.Context())
+	if currentUser == nil {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 
 	// Non-admin can only view their own profile
 	if currentUser.ID != targetID && !HasPermission(currentUser, "read", "users") {
@@ -177,10 +306,14 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, user)
 }
 
-// UpdateUser modifies a user's profile.
+// UpdateUser modifies a user's profile, status, or roles.
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "id")
 	currentUser := GetUserFromContext(r.Context())
+	if currentUser == nil {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 
 	// Non-admin can only update their own profile and cannot change roles
 	if currentUser.ID != targetID && !HasPermission(currentUser, "update", "users") {
@@ -194,18 +327,33 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disallow privilege escalation
-	if currentUser.ID == targetID && !HasPermission(currentUser, "*", "users") {
-		req.RoleIDs = nil
-		req.Status = ""
-	}
-
-	updated, err := h.svc.UpdateUser(r.Context(), targetID, req)
+	updated, err := h.svc.UpdateUserByActor(r.Context(), currentUser, targetID, req, auditMetaFromRequest(r))
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// ActivateUser sets a user account status to active.
+func (h *Handler) ActivateUser(w http.ResponseWriter, r *http.Request) {
+	h.setUserStatus(w, r, StatusActive)
+}
+
+// DeactivateUser sets a user account status to inactive.
+func (h *Handler) DeactivateUser(w http.ResponseWriter, r *http.Request) {
+	h.setUserStatus(w, r, StatusInactive)
+}
+
+func (h *Handler) setUserStatus(w http.ResponseWriter, r *http.Request, status UserStatus) {
+	targetID := chi.URLParam(r, "id")
+	currentUser := GetUserFromContext(r.Context())
+	updated, err := h.svc.SetUserStatus(r.Context(), currentUser, targetID, status, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
 	respondJSON(w, http.StatusOK, updated)
 }
 
@@ -214,17 +362,129 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "id")
 	currentUser := GetUserFromContext(r.Context())
 
-	if currentUser.ID == targetID {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot delete your own account"})
-		return
-	}
-
-	if err := h.svc.DeleteUser(r.Context(), targetID); err != nil {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+	if err := h.svc.DeleteUserByActor(r.Context(), currentUser, targetID, auditMetaFromRequest(r)); err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "user deleted successfully"})
+}
+
+// ListInvitations returns all admin onboarding invitations.
+func (h *Handler) ListInvitations(w http.ResponseWriter, r *http.Request) {
+	list, err := h.svc.ListInvitations(r.Context())
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": list})
+}
+
+// CreateInvitation issues a hashed expiring invitation token and returns the plain token once.
+func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
+	currentUser := GetUserFromContext(r.Context())
+	var req CreateInvitationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	rawToken, inv, err := h.svc.CreateInvitation(r.Context(), currentUser, req, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{
+		"invitation": inv,
+		"token":      rawToken,
+	}
+	if inv.EmailSent != nil {
+		resp["email_sent"] = *inv.EmailSent
+	}
+	respondJSON(w, http.StatusCreated, resp)
+}
+
+// ResendInvitation rotates an invitation token and extends expiration.
+func (h *Handler) ResendInvitation(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	currentUser := GetUserFromContext(r.Context())
+	var body struct {
+		ExpiresInHours int `json:"expires_in_hours"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	rawToken, inv, err := h.svc.ResendInvitation(r.Context(), currentUser, id, body.ExpiresInHours, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{
+		"invitation": inv,
+		"token":      rawToken,
+	}
+	if inv.EmailSent != nil {
+		resp["email_sent"] = *inv.EmailSent
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// RevokeInvitation marks an invitation revoked so it cannot be redeemed.
+func (h *Handler) RevokeInvitation(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	inv, err := h.svc.RevokeInvitation(r.Context(), id, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, inv)
+}
+
+// DeleteInvitation removes an invitation record.
+func (h *Handler) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.svc.DeleteInvitation(r.Context(), id, auditMetaFromRequest(r)); err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "invitation deleted"})
+}
+
+// PreviewInvitation validates a raw invitation token and returns safe onboarding metadata.
+func (h *Handler) PreviewInvitation(w http.ResponseWriter, r *http.Request) {
+	rawToken := strings.TrimSpace(r.URL.Query().Get("token"))
+	inv, err := h.svc.PreviewInvitation(r.Context(), rawToken)
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"email":      inv.Email,
+		"username":   inv.Username,
+		"first_name": inv.FirstName,
+		"last_name":  inv.LastName,
+		"expires_at": inv.ExpiresAt,
+		"roles":      inv.Roles,
+	})
+}
+
+// AcceptInvitation redeems an invitation token, creates the admin account, and signs the user in.
+func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	var req AcceptInvitationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	user, token, err := h.svc.AcceptInvitation(r.Context(), req, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	isProduction := h.svc.cfg.Server.Env == "production"
+	SetAuthCookie(w, token, h.svc.cfg.Auth.TokenExpiration, isProduction)
+	respondJSON(w, http.StatusCreated, map[string]any{
+		"token": token,
+		"user":  user,
+	})
 }
 
 // ListRoles returns all registered system roles.
@@ -237,14 +497,90 @@ func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"data": roles})
 }
 
-type CreateTokenRequestBody struct {
-	Name            string   `json:"name"`
-	Permissions     []string `json:"permissions"`
-	DurationSeconds *int64   `json:"duration_seconds"`
+// GetRole returns details and permissions for a single role.
+func (h *Handler) GetRole(w http.ResponseWriter, r *http.Request) {
+	role, err := h.svc.GetRole(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, role)
 }
 
-// CreateAPIToken generates a new Personal Access Token for the authenticated user.
-func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
+// CreateRole creates a custom admin role.
+func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
+	var req RoleMutationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	role, err := h.svc.CreateRole(r.Context(), req, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusCreated, role)
+}
+
+// UpdateRole updates a role and its permissions.
+func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
+	var req RoleMutationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	role, err := h.svc.UpdateRole(r.Context(), chi.URLParam(r, "id"), req, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, role)
+}
+
+// DuplicateRole clones an existing role and its permissions.
+func (h *Handler) DuplicateRole(w http.ResponseWriter, r *http.Request) {
+	var req RoleMutationRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	role, err := h.svc.DuplicateRole(r.Context(), chi.URLParam(r, "id"), req, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusCreated, role)
+}
+
+// DeleteRole deletes an unused custom role.
+func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteRole(r.Context(), chi.URLParam(r, "id"), auditMetaFromRequest(r)); err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "role deleted successfully"})
+}
+
+// ListPermissions returns the catalog of assignable RBAC permissions.
+func (h *Handler) ListPermissions(w http.ResponseWriter, r *http.Request) {
+	perms, err := h.svc.ListPermissions(r.Context())
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": perms})
+}
+
+type CreateTokenRequestBody struct {
+	Name            string    `json:"name"`
+	Kind            TokenKind `json:"kind"`
+	Description     string    `json:"description"`
+	TokenType       string    `json:"token_type"`
+	Permissions     []string  `json:"permissions"`
+	DurationSeconds *int64    `json:"duration_seconds"`
+	NeverExpires    bool      `json:"never_expires"`
+}
+
+func (h *Handler) handleCreateToken(w http.ResponseWriter, r *http.Request, forcedKind TokenKind) {
 	currentUser := GetUserFromContext(r.Context())
 	var body CreateTokenRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -252,20 +588,27 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Name == "" {
+	if strings.TrimSpace(body.Name) == "" {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
 
-	var duration *time.Duration
-	if body.DurationSeconds != nil && *body.DurationSeconds > 0 {
-		d := time.Duration(*body.DurationSeconds) * time.Second
-		duration = &d
+	kind := body.Kind
+	if forcedKind != "" {
+		kind = forcedKind
 	}
 
-	rawToken, token, err := h.svc.CreateAPIToken(r.Context(), currentUser.ID, body.Name, body.Permissions, duration)
+	rawToken, token, err := h.svc.CreateTokenWithOptions(r.Context(), currentUser, CreateTokenRequest{
+		Name:            body.Name,
+		Kind:            kind,
+		Description:     body.Description,
+		TokenType:       body.TokenType,
+		Permissions:     body.Permissions,
+		DurationSeconds: body.DurationSeconds,
+		NeverExpires:    body.NeverExpires,
+	}, auditMetaFromRequest(r))
 	if err != nil {
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -275,28 +618,74 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListAPITokens returns active API tokens for the authenticated user.
+// CreateAPIToken generates a new API, Admin, or Transfer Token for the authenticated user.
+func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	h.handleCreateToken(w, r, "")
+}
+
+// CreateTransferToken generates a new Transfer Token for CLI/migration sync operations.
+func (h *Handler) CreateTransferToken(w http.ResponseWriter, r *http.Request) {
+	h.handleCreateToken(w, r, TokenKindTransfer)
+}
+
+// ListAPITokens returns API/Admin/Transfer tokens visible to the authenticated user.
 func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 	currentUser := GetUserFromContext(r.Context())
-	tokens, err := h.svc.ListAPITokens(r.Context(), currentUser.ID)
+	kind := TokenKind(strings.TrimSpace(r.URL.Query().Get("kind")))
+	tokens, err := h.svc.ListTokensByKind(r.Context(), currentUser, kind)
 	if err != nil {
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"data": tokens})
 }
 
-// RevokeAPIToken deletes an API token.
+// ListTransferTokens returns Transfer tokens visible to the authenticated user.
+func (h *Handler) ListTransferTokens(w http.ResponseWriter, r *http.Request) {
+	currentUser := GetUserFromContext(r.Context())
+	tokens, err := h.svc.ListTokensByKind(r.Context(), currentUser, TokenKindTransfer)
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": tokens})
+}
+
+// RotateAPIToken rotates an active token and returns its replacement plaintext secret once.
+func (h *Handler) RotateAPIToken(w http.ResponseWriter, r *http.Request) {
+	tokenID := chi.URLParam(r, "id")
+	currentUser := GetUserFromContext(r.Context())
+	rawToken, token, err := h.svc.RotateAPIToken(r.Context(), currentUser, tokenID, auditMetaFromRequest(r))
+	if err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"token":    rawToken,
+		"metadata": token,
+	})
+}
+
+// RevokeAPIToken marks an API token as revoked so it can no longer authenticate.
 func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	tokenID := chi.URLParam(r, "id")
 	currentUser := GetUserFromContext(r.Context())
-
-	if err := h.svc.RevokeAPIToken(r.Context(), tokenID, currentUser.ID); err != nil {
-		respondJSON(w, http.StatusNotFound, map[string]string{"error": "token not found"})
+	if err := h.svc.RevokeAPITokenByActor(r.Context(), currentUser, tokenID, auditMetaFromRequest(r)); err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
-
 	respondJSON(w, http.StatusOK, map[string]string{"message": "token revoked successfully"})
+}
+
+// DeleteAPIToken permanently removes an API, Admin, or Transfer token.
+func (h *Handler) DeleteAPIToken(w http.ResponseWriter, r *http.Request) {
+	tokenID := chi.URLParam(r, "id")
+	currentUser := GetUserFromContext(r.Context())
+	if err := h.svc.DeleteAPITokenByActor(r.Context(), currentUser, tokenID, auditMetaFromRequest(r)); err != nil {
+		respondJSON(w, mapAuthServiceErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "token deleted successfully"})
 }
 
 func respondJSON(w http.ResponseWriter, status int, data any) {

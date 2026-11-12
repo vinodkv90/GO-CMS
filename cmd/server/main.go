@@ -22,6 +22,7 @@ import (
 	"github.com/go-cms/cms/internal/fields"
 	"github.com/go-cms/cms/internal/media"
 	"github.com/go-cms/cms/internal/plugins"
+	"github.com/go-cms/cms/internal/storage"
 	"github.com/go-cms/cms/internal/storage/local"
 	"github.com/go-cms/cms/internal/templates"
 	"github.com/go-cms/cms/internal/themes"
@@ -105,7 +106,8 @@ func main() {
 		logger.Warn("Failed to initialize local storage provider", "error", errStorage)
 	} else if sqlDB, ok := db.(interfaces.SQLDatabase); ok {
 		mediaRepo := media.NewSQLRepository(sqlDB)
-		mediaSvc = media.NewService(mediaRepo, localStorage, cfg, logger)
+		swappableStorage := storage.NewSwappable(localStorage)
+		mediaSvc = media.NewService(mediaRepo, swappableStorage, cfg, logger)
 		if contentSvc != nil {
 			contentSvc.SetMediaLookup(func(ctx context.Context, id string) (string, error) {
 				asset, err := mediaSvc.GetAsset(ctx, id)
@@ -139,12 +141,13 @@ func main() {
 		logger.Warn("Failed to scan plugins directory", "error", err)
 	}
 
-	// Register built-in reference plugins
+	// Register built-in reference plugins and reconcile with persisted cms_plugins_state
 	_ = pluginMgr.RegisterNative(auditlog.New())
 	_ = pluginMgr.RegisterNative(seoanalyzer.New())
-	_ = pluginMgr.Enable(context.Background(), "audit-log")
-	_ = pluginMgr.Enable(context.Background(), "seo-analyzer")
-	logger.Info("Plugin architecture initialized and reference plugins enabled")
+	if err := pluginMgr.BootstrapPlugins(context.Background(), "audit-log", "seo-analyzer"); err != nil {
+		logger.Warn("Plugin bootstrap completed with warnings", "error", err)
+	}
+	logger.Info("Plugin architecture initialized and reconciled with database state")
 
 	// 6. Initialize HTTP Server
 	server := api.NewServer(cfg, db, authSvc, contentSvc, mediaSvc, pluginMgr, renderer, logger)

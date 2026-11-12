@@ -56,13 +56,26 @@ func GetAPITokenFromContext(ctx context.Context) *APIToken {
 
 // AuthMiddleware inspects incoming requests for Bearer JWT or Personal Access Tokens or Session Cookies.
 func AuthMiddleware(svc *Service) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
+	return func(origNext http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := extractToken(r)
 			if tokenStr == "" {
-				next.ServeHTTP(w, r)
+				origNext.ServeHTTP(w, r)
 				return
 			}
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if u := GetUserFromContext(r.Context()); u != nil {
+					apiTok := GetAPITokenFromContext(r.Context())
+					if apiTok == nil || apiTok.Kind == TokenKindAdmin {
+						policy := svc.securityPolicy(r.Context())
+						if !IsIPAllowed(r.RemoteAddr, policy.AllowedAdminIPCIDRs) {
+							respondAuthError(w, http.StatusForbidden, ErrIPNotAllowed.Error())
+							return
+						}
+					}
+				}
+				origNext.ServeHTTP(w, r)
+			})
 
 			// Case 1: Personal Access Token (PAT)
 			if IsAPIToken(tokenStr) {
@@ -104,7 +117,33 @@ func RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// RequirePermission enforces that the authenticated user possesses the required RBAC permission.
+// TokenAllowsPermission verifies whether a token is active and permits the requested action/resource.
+func TokenAllowsPermission(tok *APIToken, action, resource string) bool {
+	if tok == nil || tok.RevokedAt != nil {
+		return false
+	}
+	if tok.ExpiresAt != nil && tok.ExpiresAt.Before(time.Now().UTC()) {
+		return false
+	}
+	if tok.Kind == TokenKindTransfer && !strings.HasPrefix(strings.ToLower(resource), "transfer") {
+		return false
+	}
+	return MatchTokenPermission(tok.Permissions, action, resource)
+}
+
+// RequestHasPermission checks both the authenticated user's live RBAC permissions and any active PAT bounds.
+func RequestHasPermission(ctx context.Context, action, resource string) bool {
+	user := GetUserFromContext(ctx)
+	if !HasPermission(user, action, resource) {
+		return false
+	}
+	if apiToken := GetAPITokenFromContext(ctx); apiToken != nil {
+		return TokenAllowsPermission(apiToken, action, resource)
+	}
+	return true
+}
+
+// RequirePermission enforces that the authenticated user and any API token possess the required RBAC permission.
 func RequirePermission(action, resource string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,20 +153,16 @@ func RequirePermission(action, resource string) func(http.Handler) http.Handler 
 				return
 			}
 
-			// If authenticated via API Token, check token permissions
-			if apiToken := GetAPITokenFromContext(r.Context()); apiToken != nil {
-				if !MatchTokenPermission(apiToken.Permissions, action, resource) {
-					respondAuthError(w, http.StatusForbidden, "Forbidden: token has insufficient permissions")
-					return
-				}
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Check user RBAC permissions
 			if !HasPermission(user, action, resource) {
 				respondAuthError(w, http.StatusForbidden, "Forbidden: insufficient permissions")
 				return
+			}
+
+			if apiToken := GetAPITokenFromContext(r.Context()); apiToken != nil {
+				if !TokenAllowsPermission(apiToken, action, resource) {
+					respondAuthError(w, http.StatusForbidden, "Forbidden: token has insufficient permissions")
+					return
+				}
 			}
 
 			next.ServeHTTP(w, r)
@@ -155,14 +190,25 @@ func RequireRole(roles ...string) func(http.Handler) http.Handler {
 	}
 }
 
+func bearerToken(r *http.Request) (string, bool) {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" {
+		return "", false
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		tok := strings.TrimSpace(parts[1])
+		if tok != "" {
+			return tok, true
+		}
+	}
+	return "", false
+}
+
 // extractToken retrieves the token string from Authorization header or cookie.
 func extractToken(r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			return strings.TrimSpace(parts[1])
-		}
+	if tok, ok := bearerToken(r); ok {
+		return tok
 	}
 
 	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
@@ -215,13 +261,24 @@ func ClearAuthCookie(w http.ResponseWriter) {
 // double-submit token. Bearer-token requests are not vulnerable to browser
 // cookie CSRF and are left unchanged. Public authentication endpoints (login,
 // register, logout) do not require prior CSRF validation.
+func hasBearerAuthorization(r *http.Request) bool {
+	_, ok := bearerToken(r)
+	return ok
+}
+
 func CSRFMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions &&
-			r.Header.Get("Authorization") == "" {
-			// Skip CSRF validation for unauthenticated auth endpoints (login, register, logout)
+			!hasBearerAuthorization(r) {
+			// Skip CSRF validation for unauthenticated auth endpoints (login, register, logout, invite acceptance)
 			path := r.URL.Path
-			if strings.HasSuffix(path, "/auth/login") || strings.HasSuffix(path, "/auth/register") || strings.HasSuffix(path, "/auth/logout") {
+			if strings.HasSuffix(path, "/auth/login") ||
+				strings.HasSuffix(path, "/auth/register") ||
+				strings.HasSuffix(path, "/auth/logout") ||
+				strings.HasSuffix(path, "/auth/invitations/accept") ||
+				strings.HasSuffix(path, "/auth/mfa/verify") ||
+				strings.HasSuffix(path, "/auth/reset-expired-password") ||
+				strings.Contains(path, "/app-auth/") {
 				next.ServeHTTP(w, r)
 				return
 			}

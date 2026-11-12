@@ -693,7 +693,10 @@ export function FieldSettings({
                     desc: 'One embedded group of fields (e.g. SEO block)',
                   },
                 ].map((opt) => {
-                  const active = field.field_type === opt.type;
+                  const active = opt.repeatable
+                    ? field.field_type === 'repeatable_component' ||
+                      (field.field_type === 'component' && Boolean(config.repeatable))
+                    : field.field_type === 'component' && !config.repeatable;
                   const disabled = isEditing && !active;
                   const Icon = opt.icon;
                   return (
@@ -1031,7 +1034,7 @@ export function FieldSettings({
                         ? 0
                         : kind === 'json'
                           ? field.field_type === 'blocks'
-                            ? []
+                            ? { type: 'doc', content: [{ type: 'paragraph' }] }
                             : {}
                           : ''
                     : undefined,

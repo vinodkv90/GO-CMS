@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/fields"
@@ -25,6 +26,9 @@ var (
 	ErrPluginNotEnabled  = errors.New("plugin is not enabled")
 )
 
+// AuditRecorderFunc bridges plugin audit events into the core audit logging service.
+type AuditRecorderFunc func(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any)
+
 // Manager coordinates plugin discovery, registration, lifecycle transitions, and API routing.
 type Manager struct {
 	mu            sync.RWMutex
@@ -34,11 +38,22 @@ type Manager struct {
 	fieldReg      *fields.Registry
 	db            interfaces.Database
 	pluginsRouter chi.Router
+	auditFn       AuditRecorderFunc
 
 	entities   map[string]*PluginEntity
 	instances  map[string]pluginsdk.Plugin
 	adapters   map[string]*HostAdapter
 	subrouters map[string]chi.Router
+}
+
+// SetAuditRecorder installs the host audit recorder for current and future enabled plugins.
+func (m *Manager) SetAuditRecorder(fn AuditRecorderFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.auditFn = fn
+	for _, adapter := range m.adapters {
+		adapter.SetAuditRecorder(fn)
+	}
 }
 
 // NewManager creates a new plugin lifecycle manager.
@@ -92,9 +107,43 @@ func (m *Manager) dispatchRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subPath := "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if perm := findRoutePermission(entity.Manifest.Routes, r.Method, subPath); perm != "" {
+		if auth.GetUserFromContext(r.Context()) == nil {
+			http.Error(w, `{"error":"Authentication required"}`, http.StatusUnauthorized)
+			return
+		}
+		action, resource := splitPluginPermission(perm)
+		if !auth.RequestHasPermission(r.Context(), action, resource) {
+			http.Error(w, `{"error":"Forbidden: insufficient permissions"}`, http.StatusForbidden)
+			return
+		}
+	}
+
 	subReq := r.Clone(context.WithValue(r.Context(), chi.RouteCtxKey, chi.NewRouteContext()))
 	subReq.URL.Path = subPath
 	subrouter.ServeHTTP(w, subReq)
+}
+
+func findRoutePermission(routes []pluginsdk.RouteDef, method, subPath string) string {
+	cleanSub := "/" + strings.Trim(subPath, "/")
+	for _, rt := range routes {
+		if !strings.EqualFold(strings.TrimSpace(rt.Method), method) {
+			continue
+		}
+		cleanRoute := "/" + strings.Trim(rt.Path, "/")
+		if cleanRoute == cleanSub || (strings.HasSuffix(cleanRoute, "/*") && strings.HasPrefix(cleanSub, strings.TrimSuffix(cleanRoute, "/*"))) {
+			return strings.TrimSpace(rt.Permission)
+		}
+	}
+	return ""
+}
+
+func splitPluginPermission(perm string) (string, string) {
+	parts := strings.SplitN(strings.TrimSpace(perm), ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "read", perm
 }
 
 // Router returns the parent Chi router that routes requests to individual plugin subrouters.
@@ -168,10 +217,10 @@ func (m *Manager) RegisterNative(p pluginsdk.Plugin) error {
 	m.instances[manifest.ID] = p
 
 	existing, ok := m.entities[manifest.ID]
-	settings := make(map[string]any)
+	settings := applySchemaDefaults(manifest.SettingsSchema, nil)
 	status := StatusInstalled
 	if ok {
-		settings = existing.Settings
+		settings = applySchemaDefaults(manifest.SettingsSchema, existing.Settings)
 		status = existing.Status
 	}
 
@@ -221,6 +270,9 @@ func (m *Manager) Enable(ctx context.Context, id string) error {
 		},
 	)
 	adapter.SetPluginName(entity.Manifest.Name)
+	if m.auditFn != nil {
+		adapter.SetAuditRecorder(m.auditFn)
+	}
 	m.adapters[id] = adapter
 
 	// Initialize and start plugin
@@ -250,6 +302,7 @@ func (m *Manager) Enable(ctx context.Context, id string) error {
 	entity.Status = StatusEnabled
 	entity.EnabledAt = &now
 	entity.ErrorMsg = ""
+	m.persistPluginStateLocked(ctx, entity)
 
 	m.logger.Info("Plugin enabled successfully", "id", id, "name", entity.Manifest.Name)
 	return nil
@@ -283,6 +336,7 @@ func (m *Manager) Disable(ctx context.Context, id string) error {
 
 	entity.Status = StatusDisabled
 	entity.EnabledAt = nil
+	m.persistPluginStateLocked(ctx, entity)
 
 	m.logger.Info("Plugin disabled", "id", id)
 	return nil
@@ -338,7 +392,61 @@ func (m *Manager) UpdateSettings(ctx context.Context, id string, settings map[st
 			_ = adapter.SetSetting(k, v)
 		}
 	}
+	m.persistPluginStateLocked(ctx, entity)
 
 	m.logger.Info("Updated plugin settings", "id", id)
 	return nil
+}
+
+// BootstrapPlugins reconciles registered plugins with persisted database state and activates defaults on first boot.
+func (m *Manager) BootstrapPlugins(ctx context.Context, defaultEnabled ...string) error {
+	states := m.loadAllPersistedStates(ctx)
+	defaultsMap := make(map[string]bool, len(defaultEnabled))
+	for _, id := range defaultEnabled {
+		defaultsMap[id] = true
+	}
+
+	m.mu.Lock()
+	var toEnable []string
+	for id, entity := range m.entities {
+		if st, exists := states[id]; exists {
+			entity.Settings = applySchemaDefaults(entity.Manifest.SettingsSchema, st.Settings)
+			if st.Enabled {
+				if entity.Status != StatusEnabled {
+					toEnable = append(toEnable, id)
+				}
+			} else {
+				entity.Status = StatusDisabled
+				entity.EnabledAt = nil
+			}
+		} else {
+			entity.Settings = applySchemaDefaults(entity.Manifest.SettingsSchema, entity.Settings)
+			if defaultsMap[id] && entity.Status != StatusEnabled {
+				toEnable = append(toEnable, id)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	for _, id := range toEnable {
+		if err := m.Enable(ctx, id); err != nil {
+			m.logger.Warn("Failed to activate plugin during bootstrap", "plugin", id, "error", err)
+		}
+	}
+	return nil
+}
+
+func applySchemaDefaults(schema map[string]any, current map[string]any) map[string]any {
+	out := make(map[string]any, len(current)+len(schema))
+	for k, rawDef := range schema {
+		if defMap, ok := rawDef.(map[string]any); ok {
+			if defVal, hasDefault := defMap["default"]; hasDefault {
+				out[k] = defVal
+			}
+		}
+	}
+	for k, v := range current {
+		out[k] = v
+	}
+	return out
 }

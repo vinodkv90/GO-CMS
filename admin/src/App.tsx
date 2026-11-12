@@ -11,12 +11,16 @@ import { MediaLibraryView } from './views/MediaLibraryView';
 import { PluginsView } from './views/PluginsView';
 import { ThemesView } from './views/ThemesView';
 import { UsersView } from './views/UsersView';
+import { SettingsView } from './views/SettingsView';
+import { AcceptInviteView } from './views/AcceptInviteView';
 import { getCookie, getStoredToken, setStoredToken } from './api/client';
 import {
   authApi,
   contentTypesApi,
   mediaApi,
   pluginsApi,
+  preferencesApi,
+  settingsApi,
   themesApi,
 } from './api/endpoints';
 import type {
@@ -24,13 +28,20 @@ import type {
   ContentType,
   MediaAsset,
   PluginEntity,
+  PublicGeneralSettings,
   ThemeManifest,
+  UserPreferences,
 } from './types';
 
 const queryClient = new QueryClient();
 
 export function AppContent() {
   const [user, setUser] = useState<User | null>(null);
+  const [inviteToken, setInviteToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const tok = new URLSearchParams(window.location.search).get('invite_token');
+    return tok && tok.trim() !== '' ? tok.trim() : null;
+  });
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [currentTab, setCurrentTab] = useState<string>(() => {
     if (typeof window === 'undefined') return 'dashboard';
@@ -48,6 +59,31 @@ export function AppContent() {
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [plugins, setPlugins] = useState<PluginEntity[]>([]);
   const [themes, setThemes] = useState<ThemeManifest[]>([]);
+  const [publicSettings, setPublicSettings] = useState<PublicGeneralSettings | null>(null);
+  const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+
+  useEffect(() => {
+    settingsApi
+      .getPublic()
+      .then((res) => setPublicSettings(res.data))
+      .catch(() => {
+        // Public branding fallback stays built-in if API is unavailable.
+      });
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || !publicSettings?.site_name) return;
+    document.title = `${publicSettings.site_name} — Admin Console`;
+    if (publicSettings.favicon_url) {
+      let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+      if (!icon) {
+        icon = document.createElement('link');
+        icon.rel = 'icon';
+        document.head.appendChild(icon);
+      }
+      icon.href = publicSettings.favicon_url;
+    }
+  }, [publicSettings]);
 
   // Initial authentication check
   useEffect(() => {
@@ -106,6 +142,14 @@ export function AppContent() {
   useEffect(() => {
     if (user) {
       refreshCoreData();
+      preferencesApi
+        .get()
+        .then((res) => setPreferences(res.data))
+        .catch(() => {
+          // Ignore preference fetch failure on fallback environments.
+        });
+    } else {
+      setPreferences(null);
     }
   }, [user, refreshCoreData]);
 
@@ -127,6 +171,8 @@ export function AppContent() {
   const handleSelectTab = (tab: string, param?: string) => {
     if (tab === 'content' && param) {
       setCurrentTab(`content:${param}`);
+    } else if (tab === 'settings' && param) {
+      setCurrentTab(`settings:${param}`);
     } else {
       setCurrentTab(tab);
     }
@@ -140,6 +186,8 @@ export function AppContent() {
     if (currentTab === 'plugins') return 'Plugins';
     if (currentTab === 'themes') return 'Themes';
     if (currentTab === 'users') return 'Users & Access';
+    if (currentTab === 'profile' || currentTab === 'settings:profile') return 'Profile & Preferences';
+    if (currentTab === 'settings' || currentTab.startsWith('settings:')) return 'Settings';
     if (currentTab.startsWith('content:')) {
       const uid = currentTab.replace('content:', '');
       const ct = contentTypes.find((t) => t.uid === uid);
@@ -147,6 +195,15 @@ export function AppContent() {
     }
     return 'Admin Console';
   };
+
+  const clearInviteTokenFromUrl = useCallback(() => {
+    setInviteToken(null);
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('invite_token');
+      window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    }
+  }, []);
 
   if (isAuthChecking) {
     return (
@@ -166,9 +223,24 @@ export function AppContent() {
     );
   }
 
+  if (inviteToken) {
+    return (
+      <AcceptInviteView
+        token={inviteToken}
+        publicSettings={publicSettings}
+        onAccepted={(acceptedUser) => {
+          clearInviteTokenFromUrl();
+          setUser(acceptedUser);
+        }}
+        onCancel={clearInviteTokenFromUrl}
+      />
+    );
+  }
+
   if (!user) {
     return (
       <LoginView
+        publicSettings={publicSettings}
         onLoginSuccess={(loggedInUser) => {
           setUser(loggedInUser);
         }}
@@ -233,7 +305,34 @@ export function AppContent() {
   } else if (currentTab === 'themes') {
     mainContent = <ThemesView themes={themes} />;
   } else if (currentTab === 'users') {
-    mainContent = <UsersView />;
+    mainContent = (
+      <UsersView
+        currentUser={user}
+        onUserUpdated={(updatedUser) => setUser(updatedUser)}
+        onOpenRoles={() => setCurrentTab('settings:admin-roles')}
+      />
+    );
+  } else if (
+    currentTab === 'settings' ||
+    currentTab === 'profile' ||
+    currentTab.startsWith('settings:')
+  ) {
+    const section =
+      currentTab === 'profile'
+        ? 'profile'
+        : currentTab === 'settings'
+          ? 'overview'
+          : currentTab.replace('settings:', '');
+    mainContent = (
+      <SettingsView
+        user={user}
+        section={section}
+        onSelectSection={(nextSection) => setCurrentTab(`settings:${nextSection}`)}
+        onUserUpdated={(updatedUser) => setUser(updatedUser)}
+        onPublicUpdated={(nextPub) => setPublicSettings(nextPub)}
+        onPreferencesUpdated={(nextPrefs) => setPreferences(nextPrefs)}
+      />
+    );
   }
 
   return (
@@ -242,9 +341,17 @@ export function AppContent() {
       currentTab={currentTab}
       onSelectTab={handleSelectTab}
       contentTypes={contentTypes}
+      publicSettings={publicSettings}
+      sidebarCollapsed={Boolean(preferences?.sidebar_collapsed)}
       onLogout={handleLogout}
       pageTitle={getPageTitle()}
-      fullBleed={currentTab === 'content-types' || currentTab.startsWith('content:')}
+      fullBleed={
+        currentTab === 'content-types' ||
+        currentTab.startsWith('content:') ||
+        currentTab === 'settings' ||
+        currentTab === 'profile' ||
+        currentTab.startsWith('settings:')
+      }
     >
       {mainContent}
     </Layout>

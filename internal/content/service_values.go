@@ -256,19 +256,52 @@ func (s *Service) validateMedia(ctx context.Context, f ContentField, value any) 
 		if err != nil {
 			return fmt.Errorf("invalid media asset %q", id)
 		}
-		if len(f.Configuration.AllowedTypes) == 0 {
-			continue
-		}
-		allowed := false
-		for _, kind := range f.Configuration.AllowedTypes {
-			prefix := map[string]string{"images": "image/", "image": "image/", "videos": "video/", "video": "video/", "audio": "audio/", "audios": "audio/"}[kind]
-			if kind == mime || (prefix != "" && strings.HasPrefix(mime, prefix)) || (strings.HasSuffix(kind, "/*") && strings.HasPrefix(mime, strings.TrimSuffix(kind, "*"))) || ((kind == "files" || kind == "file") && !strings.HasPrefix(mime, "image/") && !strings.HasPrefix(mime, "video/") && !strings.HasPrefix(mime, "audio/")) {
-				allowed = true
-			}
-		}
-		if !allowed {
+		if !mediaMIMEAllowed(mime, f.Configuration.AllowedTypes) {
 			return fmt.Errorf("media asset %q has disallowed MIME type", id)
 		}
 	}
 	return nil
+}
+
+func isVideoMediaMIME(mime string) bool {
+	return strings.HasPrefix(mime, "video/") ||
+		mime == "application/vnd.apple.mpegurl" ||
+		mime == "application/x-mpegurl"
+}
+
+func mediaMIMEAllowed(rawMIME string, allowedTypes []string) bool {
+	if len(allowedTypes) == 0 {
+		return true
+	}
+	mime := strings.ToLower(strings.TrimSpace(rawMIME))
+	for _, rawKind := range allowedTypes {
+		kind := strings.ToLower(strings.TrimSpace(rawKind))
+		switch kind {
+		case "":
+			return true
+		case "image", "images":
+			if strings.HasPrefix(mime, "image/") {
+				return true
+			}
+		case "video", "videos":
+			if isVideoMediaMIME(mime) {
+				return true
+			}
+		case "audio", "audios":
+			if strings.HasPrefix(mime, "audio/") {
+				return true
+			}
+		case "file", "files":
+			if !strings.HasPrefix(mime, "image/") && !isVideoMediaMIME(mime) && !strings.HasPrefix(mime, "audio/") {
+				return true
+			}
+		default:
+			if kind == mime ||
+				(strings.HasSuffix(kind, "/*") && strings.HasPrefix(mime, strings.TrimSuffix(kind, "*"))) ||
+				(strings.HasSuffix(kind, "/") && strings.HasPrefix(mime, kind)) {
+				return true
+			}
+		}
+	}
+	return false
 }

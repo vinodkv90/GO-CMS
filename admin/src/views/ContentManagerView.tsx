@@ -72,6 +72,28 @@ function getEntryDisplayTitle(entry: ContentEntry | null, contentType: ContentTy
   return `${contentType.name} #${entry.id.slice(0, 8)}`;
 }
 
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      const next = record[key];
+      if (next !== undefined) {
+        sorted[key] = sortJsonValue(next);
+      }
+    }
+    return sorted;
+  }
+  return value;
+}
+
+export function canonicalSnapshot(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
 function formatCellPreview(field: ContentField, rawValue: unknown): React.ReactNode {
   if (rawValue === null || rawValue === undefined || rawValue === '') {
     return <span className="text-slate-300">—</span>;
@@ -119,7 +141,13 @@ function formatCellPreview(field: ContentField, rawValue: unknown): React.ReactN
       );
     }
     case 'component':
-      return <span className="text-xs text-slate-600">Object</span>;
+      return Array.isArray(rawValue) ? (
+        <span className="text-xs text-slate-600">
+          {rawValue.length} {rawValue.length === 1 ? 'item' : 'items'}
+        </span>
+      ) : (
+        <span className="text-xs text-slate-600">Object</span>
+      );
     case 'date':
     case 'datetime': {
       const str = String(rawValue);
@@ -181,23 +209,35 @@ function parseServerErrors(err: unknown): {
 function buildDefaultFormData(contentType: ContentType): Record<string, unknown> {
   const initial: Record<string, unknown> = {};
   for (const f of contentType.fields || []) {
+    if (f.configuration?.read_only || f.configuration?.hidden) {
+      continue;
+    }
     const def = f.configuration?.default;
     if (def !== undefined) {
-      initial[f.field_key] = def;
+      initial[f.field_key] = structuredClone(def);
     } else if (f.field_type === 'boolean') {
       initial[f.field_key] = false;
-    } else if (f.field_type === 'number' || f.field_type === 'decimal') {
-      initial[f.field_key] = '';
     } else if (
       f.field_type === 'repeatable_component' ||
       f.field_type === 'dynamic_zone' ||
-      f.field_type === 'relation_multiple'
+      f.field_type === 'relation_multiple' ||
+      (f.field_type === 'component' && Boolean(f.configuration?.repeatable)) ||
+      (f.field_type === 'media' && Boolean(f.configuration?.multiple))
     ) {
       initial[f.field_key] = [];
-    } else if (f.field_type === 'media' && f.configuration?.multiple) {
-      initial[f.field_key] = [];
-    } else if (f.field_type === 'component') {
-      initial[f.field_key] = {};
+    } else if (
+      f.field_type === 'number' ||
+      f.field_type === 'decimal' ||
+      f.field_type === 'date' ||
+      f.field_type === 'time' ||
+      f.field_type === 'datetime' ||
+      f.field_type === 'json' ||
+      f.field_type === 'blocks' ||
+      f.field_type === 'media' ||
+      f.field_type === 'relation_single' ||
+      f.field_type === 'component'
+    ) {
+      initial[f.field_key] = null;
     } else {
       initial[f.field_key] = '';
     }
@@ -344,7 +384,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
     setActiveEntry(null);
     const defaults = buildDefaultFormData(contentType);
     setFormData(defaults);
-    setSavedFormSnapshot(JSON.stringify(defaults));
+    setSavedFormSnapshot(canonicalSnapshot(defaults));
 
     const keys = (contentType.fields || []).map((f) => f.field_key);
     const cfgOrder = Array.isArray(contentType.settings?.field_order)
@@ -424,7 +464,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
         setActiveEntry(single);
         const data = single?.draft_data || buildDefaultFormData(contentType);
         setFormData(data);
-        setSavedFormSnapshot(JSON.stringify(data));
+        setSavedFormSnapshot(canonicalSnapshot(data));
       }
     } catch (err: unknown) {
       toast.error(
@@ -452,7 +492,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
   const isDirty = useMemo(
     () =>
       viewMode === 'edit' &&
-      JSON.stringify(formData) !== savedFormSnapshot,
+      canonicalSnapshot(formData) !== savedFormSnapshot,
     [viewMode, formData, savedFormSnapshot],
   );
 
@@ -504,7 +544,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
     const defaults = buildDefaultFormData(contentType);
     setActiveEntry(null);
     setFormData(defaults);
-    setSavedFormSnapshot(JSON.stringify(defaults));
+    setSavedFormSnapshot(canonicalSnapshot(defaults));
     setEditorError(null);
     setFieldErrors({});
     setClientInvalidPaths({});
@@ -516,7 +556,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
     const data = entry.draft_data || {};
     setActiveEntry(entry);
     setFormData(data);
-    setSavedFormSnapshot(JSON.stringify(data));
+    setSavedFormSnapshot(canonicalSnapshot(data));
     setEditorError(null);
     setFieldErrors({});
     setClientInvalidPaths({});
@@ -554,7 +594,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
       setActiveEntry(saved);
       const nextData = saved.draft_data || formData;
       setFormData(nextData);
-      setSavedFormSnapshot(JSON.stringify(nextData));
+      setSavedFormSnapshot(canonicalSnapshot(nextData));
       toast.success('Draft saved', `"${getEntryDisplayTitle(saved, contentType)}" saved.`);
       await fetchEntries();
       return saved;
@@ -579,6 +619,9 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
       }
       const published = await entriesApi.publish(contentType.uid, target.id);
       setActiveEntry(published);
+      const nextData = published.draft_data || formData;
+      setFormData(nextData);
+      setSavedFormSnapshot(canonicalSnapshot(nextData));
       toast.success('Entry published', 'Live content has been updated.');
       await fetchEntries();
     } catch (err: unknown) {
@@ -649,7 +692,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
           setActiveEntry(null);
           const defaults = buildDefaultFormData(contentType);
           setFormData(defaults);
-          setSavedFormSnapshot(JSON.stringify(defaults));
+          setSavedFormSnapshot(canonicalSnapshot(defaults));
         } else {
           setViewMode('list');
           setActiveEntry(null);
@@ -721,7 +764,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
       setActiveEntry(restored);
       const data = restored.draft_data || {};
       setFormData(data);
-      setSavedFormSnapshot(JSON.stringify(data));
+      setSavedFormSnapshot(canonicalSnapshot(data));
       setIsVersionModalOpen(false);
       toast.success(`Restored version v${versionNumber}`, 'Loaded into draft.');
       await fetchEntries();
@@ -1595,9 +1638,25 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
                                   onChange={(value) => {
                                     if (documentTab !== 'draft') return;
                                     setFieldErrors((prev) => {
-                                      if (!(field.field_key in prev)) return prev;
-                                      const next = { ...prev };
-                                      delete next[field.field_key];
+                                      const prefixDot = `${field.field_key}.`;
+                                      const prefixBracket = `${field.field_key}[`;
+                                      const hasMatch = Object.keys(prev).some(
+                                        (k) =>
+                                          k === field.field_key ||
+                                          k.startsWith(prefixDot) ||
+                                          k.startsWith(prefixBracket),
+                                      );
+                                      if (!hasMatch) return prev;
+                                      const next: Record<string, string> = {};
+                                      for (const [k, v] of Object.entries(prev)) {
+                                        if (
+                                          k !== field.field_key &&
+                                          !k.startsWith(prefixDot) &&
+                                          !k.startsWith(prefixBracket)
+                                        ) {
+                                          next[k] = v;
+                                        }
+                                      }
                                       return next;
                                     });
                                     setFormData((current) => ({

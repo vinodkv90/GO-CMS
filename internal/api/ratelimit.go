@@ -17,6 +17,7 @@ type clientBucket struct {
 // IPRateLimiter provides in-memory token-bucket rate limiting by client IP address.
 type IPRateLimiter struct {
 	mu           sync.Mutex
+	enabled      bool
 	clients      map[string]*clientBucket
 	rate         float64 // tokens replenished per second
 	burst        float64 // maximum token burst capacity
@@ -29,6 +30,7 @@ type IPRateLimiter struct {
 // burst: maximum capacity for burst requests (e.g., 20).
 func NewIPRateLimiter(rate float64, burst int) *IPRateLimiter {
 	limiter := &IPRateLimiter{
+		enabled:      true,
 		clients:      make(map[string]*clientBucket),
 		rate:         rate,
 		burst:        float64(burst),
@@ -70,10 +72,30 @@ func (l *IPRateLimiter) cleanupLoop() {
 	}
 }
 
+// UpdateConfig dynamically updates rate-limit parameters and resets client buckets.
+func (l *IPRateLimiter) UpdateConfig(enabled bool, rate float64, burst int) {
+	if rate <= 0 {
+		rate = 1
+	}
+	if burst < 1 {
+		burst = 1
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.enabled = enabled
+	l.rate = rate
+	l.burst = float64(burst)
+	l.clients = make(map[string]*clientBucket)
+}
+
 // Allow checks if the given client IP has available tokens.
 func (l *IPRateLimiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if !l.enabled {
+		return true
+	}
 
 	now := time.Now()
 	b, exists := l.clients[ip]

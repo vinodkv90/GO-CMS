@@ -53,27 +53,37 @@ func TestSplitStatements(t *testing.T) {
 
 func TestDefaultMigrations(t *testing.T) {
 	pgMigrations := DefaultMigrations("postgres")
-	assert.Len(t, pgMigrations, 3)
+	assert.Len(t, pgMigrations, 4)
 	assert.Equal(t, "202611080001", pgMigrations[0].Version)
 	assert.Equal(t, "202611080002", pgMigrations[1].Version)
 	assert.Equal(t, "202611090001", pgMigrations[2].Version)
+	assert.Equal(t, "202611120001", pgMigrations[3].Version)
 	assert.Contains(t, pgMigrations[0].UpSQL, "cms_roles")
 	assert.Contains(t, pgMigrations[0].UpSQL, "cms_users")
 	assert.Contains(t, pgMigrations[1].UpSQL, "content_types")
 	assert.Contains(t, pgMigrations[2].UpSQL, "cms_media_folders")
+	assert.Contains(t, pgMigrations[3].UpSQL, "cms_admin_invitations")
+	assert.Contains(t, pgMigrations[3].UpSQL, "cms_app_roles")
+	assert.Contains(t, pgMigrations[3].UpSQL, "cms_webhooks")
+	assert.NotEmpty(t, splitStatements(pgMigrations[3].UpSQL))
 
 	myMigrations := DefaultMigrations("mysql")
-	assert.Len(t, myMigrations, 3)
+	assert.Len(t, myMigrations, 4)
 	assert.Equal(t, "202611080001", myMigrations[0].Version)
 	assert.Equal(t, "202611080002", myMigrations[1].Version)
 	assert.Equal(t, "202611090001", myMigrations[2].Version)
+	assert.Equal(t, "202611120001", myMigrations[3].Version)
 	assert.Contains(t, myMigrations[2].UpSQL, "cms_media_folders")
+	assert.Contains(t, myMigrations[3].UpSQL, "cms_admin_invitations")
+	assert.Contains(t, myMigrations[3].UpSQL, "cms_email_templates")
+	assert.NotEmpty(t, splitStatements(myMigrations[3].UpSQL))
 
 	mongoMigrations := DefaultMigrations("mongodb")
-	assert.Len(t, mongoMigrations, 3)
+	assert.Len(t, mongoMigrations, 4)
 	assert.Equal(t, "202611080001", mongoMigrations[0].Version)
 	assert.Equal(t, "202611080002", mongoMigrations[1].Version)
 	assert.Equal(t, "202611090001", mongoMigrations[2].Version)
+	assert.Equal(t, "202611120001", mongoMigrations[3].Version)
 }
 
 // MockDatabase for testing Runner orchestration
@@ -93,5 +103,5 @@ func TestRunner_Register(t *testing.T) {
 	assert.Empty(t, runner.Migrations())
 
 	runner.Register(DefaultMigrations("postgres")...)
-	assert.Len(t, runner.Migrations(), 3)
+	assert.Len(t, runner.Migrations(), 4)
 }

@@ -11,14 +11,42 @@ import (
 	"github.com/go-cms/cms/internal/fields"
 )
 
+// RestAPIRuntimeConfig mirrors live REST API settings enforced on content endpoints.
+type RestAPIRuntimeConfig struct {
+	DefaultLimit       int
+	MaxLimit           int
+	WithCount          bool
+	MaxPopulateDepth   int
+	ExposeDraftPreview bool
+}
+
 // Handler handles HTTP requests for content types and dynamic content entries.
 type Handler struct {
-	svc *Service
+	svc       *Service
+	restCfgFn func(context.Context) RestAPIRuntimeConfig
 }
 
 // NewHandler creates a new content HTTP handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// SetRestAPISettingsProvider injects a live REST API settings resolver.
+func (h *Handler) SetRestAPISettingsProvider(fn func(context.Context) RestAPIRuntimeConfig) {
+	h.restCfgFn = fn
+}
+
+func (h *Handler) restConfig(ctx context.Context) RestAPIRuntimeConfig {
+	if h.restCfgFn != nil {
+		return h.restCfgFn(ctx)
+	}
+	return RestAPIRuntimeConfig{
+		DefaultLimit:       25,
+		MaxLimit:           100,
+		WithCount:          true,
+		MaxPopulateDepth:   MaxComponentDepth,
+		ExposeDraftPreview: true,
+	}
 }
 
 // RegisterRoutes mounts all Content Type Builder and Content Manager routes.
@@ -193,7 +221,7 @@ func (h *Handler) ListOrGetSingle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	previewDraft := canPreviewDraft(r)
+	previewDraft := h.canPreviewDraft(r)
 
 	// Single Type
 	if ct.Kind == KindSingle {
@@ -211,7 +239,13 @@ func (h *Handler) ListOrGetSingle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collection Type
+	restCfg := h.restConfig(r.Context())
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = restCfg.DefaultLimit
+	} else if restCfg.MaxLimit > 0 && limit > restCfg.MaxLimit {
+		limit = restCfg.MaxLimit
+	}
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	sortBy := r.URL.Query().Get("sort")
 	order := r.URL.Query().Get("order")
@@ -237,17 +271,20 @@ func (h *Handler) ListOrGetSingle(w http.ResponseWriter, r *http.Request) {
 		responseList = append(responseList, h.filterResponse(r.Context(), e, ct, previewDraft, auth.GetUserFromContext(r.Context())))
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{
-		"data":  responseList,
-		"total": total,
-	})
+	resp := map[string]any{
+		"data": responseList,
+	}
+	if restCfg.WithCount {
+		resp["total"] = total
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) GetEntry(w http.ResponseWriter, r *http.Request) {
 	uid := chi.URLParam(r, "uid")
 	id := chi.URLParam(r, "id")
 
-	previewDraft := canPreviewDraft(r)
+	previewDraft := h.canPreviewDraft(r)
 
 	entry, err := h.svc.GetEntry(r.Context(), uid, id, previewDraft)
 	if err != nil {
@@ -412,16 +449,19 @@ func (h *Handler) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.filterResponse(r.Context(), entry, ct, true, user))
 }
 
-// canPreviewDraft checks if the request is permitted to view draft content.
-func canPreviewDraft(r *http.Request) bool {
+// canPreviewDraft checks if draft preview is enabled and the request is permitted to view draft content.
+func (h *Handler) canPreviewDraft(r *http.Request) bool {
 	if r.URL.Query().Get("preview") != "true" {
+		return false
+	}
+	if !h.restConfig(r.Context()).ExposeDraftPreview {
 		return false
 	}
 	user := auth.GetUserFromContext(r.Context())
 	if user == nil {
 		return false
 	}
-	return auth.HasPermission(user, "read", "content")
+	return auth.RequestHasPermission(r.Context(), "read", "content")
 }
 
 // filterResponse shapes output based on whether the view is draft preview or public.
@@ -450,7 +490,11 @@ func (h *Handler) responseData(ctx context.Context, data map[string]any, ct *Con
 		return nil
 	}
 	out := cloneData(data)
-	if ct == nil || depth >= MaxComponentDepth {
+	maxDepth := h.restConfig(ctx).MaxPopulateDepth
+	if maxDepth <= 0 || maxDepth > MaxComponentDepth {
+		maxDepth = MaxComponentDepth
+	}
+	if ct == nil || depth > maxDepth {
 		return out
 	}
 	for _, field := range ct.Fields {
@@ -490,8 +534,22 @@ func (h *Handler) responseData(ctx context.Context, data map[string]any, ct *Con
 }
 
 func (h *Handler) redactComponent(ctx context.Context, data map[string]any, uid string, preview bool, user *auth.User, depth int) map[string]any {
-	if uid == "" || depth >= MaxComponentDepth {
+	if uid == "" {
 		return data
+	}
+	maxDepth := h.restConfig(ctx).MaxPopulateDepth
+	if maxDepth <= 0 || maxDepth > MaxComponentDepth {
+		maxDepth = MaxComponentDepth
+	}
+	if depth > maxDepth {
+		truncated := map[string]any{"__truncated": true}
+		if id, ok := data["id"]; ok {
+			truncated["id"] = id
+		}
+		if comp, ok := data["__component"]; ok {
+			truncated["__component"] = comp
+		}
+		return truncated
 	}
 	component, err := h.svc.GetContentType(ctx, uid)
 	if err != nil || component.Kind != KindComponent {

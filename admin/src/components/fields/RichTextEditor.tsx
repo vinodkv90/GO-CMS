@@ -69,7 +69,7 @@ export function RichTextEditor({ value, onChange, disabled, id, format, path = i
       setContentError('This document contains unsupported or invalid content. Its stored value is preserved; repair it before editing.');
     }
   }, [editor, serialized, legacy, format, value]);
-  useEffect(() => { editor?.setEditable(!disabled && !legacy && !contentError); }, [editor, disabled, legacy, contentError]);
+  useEffect(() => { editor?.setEditable(!disabled && !legacy && !contentError, false); }, [editor, disabled, legacy, contentError]);
   useEffect(() => { editor?.setOptions({ editorProps: { attributes: { id, role: 'textbox', 'aria-label': configFor(field).label || field.name || field.field_key, 'aria-multiline': 'true', 'aria-invalid': String(Boolean(invalid || contentError)), 'aria-describedby': describedBy || '' } } }); }, [editor, id, describedBy, invalid, contentError, field.name, field.field_key]);
   useValidity(path, disabled ? undefined : legacyMessage || contentError, onValidityChange);
 

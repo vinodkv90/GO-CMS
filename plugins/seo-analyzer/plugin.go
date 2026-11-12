@@ -32,9 +32,52 @@ func (p *Plugin) Manifest() pluginsdk.Manifest {
 		Permissions: []string{
 			"routes:mount",
 		},
-		Routes: []pluginsdk.RouteDef{
-			{Method: http.MethodPost, Path: "/analyze"},
+		SettingsSchema: map[string]any{
+			"min_title_length": map[string]any{
+				"type":        "number",
+				"label":       "Minimum Title Length",
+				"description": "Minimum recommended character length for page titles.",
+				"default":     20,
+				"min":         5,
+				"max":         120,
+			},
+			"max_title_length": map[string]any{
+				"type":        "number",
+				"label":       "Maximum Title Length",
+				"description": "Maximum recommended character length before search snippet truncation.",
+				"default":     70,
+				"min":         30,
+				"max":         200,
+			},
+			"min_word_count": map[string]any{
+				"type":        "number",
+				"label":       "Minimum Content Word Count",
+				"description": "Minimum recommended body word count for SEO depth scoring.",
+				"default":     50,
+				"min":         10,
+				"max":         5000,
+			},
 		},
+		Routes: []pluginsdk.RouteDef{
+			{Method: http.MethodPost, Path: "/analyze", Permission: "read:plugins"},
+		},
+	}
+}
+
+func intSetting(host pluginsdk.Host, key string, fallback int) int {
+	v, ok := host.GetSetting(key)
+	if !ok || v == nil {
+		return fallback
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return fallback
 	}
 }
 
@@ -53,22 +96,26 @@ func (p *Plugin) Init(ctx context.Context, host pluginsdk.Host) error {
 			return
 		}
 
+		minTitle := intSetting(host, "min_title_length", 20)
+		maxTitle := intSetting(host, "max_title_length", 70)
+		minWords := intSetting(host, "min_word_count", 50)
+
 		score := 100
 		var recommendations []string
 
 		titleLen := len(strings.TrimSpace(input.Title))
-		if titleLen < 20 {
+		if titleLen < minTitle {
 			score -= 15
-			recommendations = append(recommendations, "Title is too short (< 20 characters)")
-		} else if titleLen > 70 {
+			recommendations = append(recommendations, "Title is too short")
+		} else if titleLen > maxTitle {
 			score -= 10
-			recommendations = append(recommendations, "Title is too long (> 70 characters)")
+			recommendations = append(recommendations, "Title is too long")
 		}
 
 		words := strings.Fields(input.Content)
-		if len(words) < 50 {
+		if len(words) < minWords {
 			score -= 25
-			recommendations = append(recommendations, "Content length is low (< 50 words)")
+			recommendations = append(recommendations, "Content length is low")
 		}
 
 		if score < 0 {

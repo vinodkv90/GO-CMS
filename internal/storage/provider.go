@@ -46,3 +46,8 @@ type StorageProvider interface {
 	// DeletePrefix deletes all objects matching the given key prefix or folder path.
 	DeletePrefix(ctx context.Context, prefix string) error
 }
+
+// HealthChecker is an optional interface implemented by storage providers supporting active connection checks.
+type HealthChecker interface {
+	CheckHealth(ctx context.Context) error
+}

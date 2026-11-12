@@ -39,8 +39,30 @@ func (p *Plugin) Manifest() pluginsdk.Manifest {
 			"hook:content:afterPublish",
 			"audit:write",
 		},
+		SettingsSchema: map[string]any{
+			"capture_content_events": map[string]any{
+				"type":        "boolean",
+				"label":       "Capture Content Lifecycle Events",
+				"description": "Subscribe to content create, update, delete, and publish events on the core EventBus.",
+				"default":     true,
+			},
+			"redact_sensitive_metadata": map[string]any{
+				"type":        "boolean",
+				"label":       "Redact Sensitive Metadata",
+				"description": "Automatically redact credentials and tokens before persisting metadata.",
+				"default":     true,
+			},
+			"retention_days": map[string]any{
+				"type":        "number",
+				"label":       "Audit Retention Target (Days)",
+				"description": "Operational retention guideline in days.",
+				"default":     90,
+				"min":         7,
+				"max":         3650,
+			},
+		},
 		Routes: []pluginsdk.RouteDef{
-			{Method: http.MethodGet, Path: "/stats"},
+			{Method: http.MethodGet, Path: "/stats", Permission: "read:system:audit_logs"},
 		},
 	}
 }
@@ -60,6 +82,11 @@ func (p *Plugin) Init(ctx context.Context, host pluginsdk.Host) error {
 	for _, evt := range events {
 		eventCopy := evt
 		err := host.SubscribeEvent(eventCopy, func(ctx context.Context, name string, payload any) error {
+			if rawEnabled, exists := host.GetSetting("capture_content_events"); exists {
+				if enabled, ok := rawEnabled.(bool); ok && !enabled {
+					return nil
+				}
+			}
 			atomic.AddInt64(&p.eventCount, 1)
 
 			entry, ok := payload.(*content.ContentEntry)

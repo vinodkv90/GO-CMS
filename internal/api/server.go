@@ -7,24 +7,31 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
 	"github.com/go-cms/cms/internal/audit"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/cache"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
 	"github.com/go-cms/cms/internal/database/interfaces"
+	"github.com/go-cms/cms/internal/database/migrations"
+	"github.com/go-cms/cms/internal/email"
+	"github.com/go-cms/cms/internal/usersperm"
+	"github.com/go-cms/cms/internal/webhooks"
 	"github.com/go-cms/cms/internal/jobs"
 	"github.com/go-cms/cms/internal/localization"
 	"github.com/go-cms/cms/internal/media"
 	"github.com/go-cms/cms/internal/metrics"
 	"github.com/go-cms/cms/internal/plugins"
 	"github.com/go-cms/cms/internal/search"
+	"github.com/go-cms/cms/internal/settings"
+	"github.com/go-cms/cms/internal/storage"
 	"github.com/go-cms/cms/internal/templates"
 	"github.com/go-cms/cms/internal/tenancy"
 )
@@ -38,6 +45,10 @@ type Server struct {
 	mediaSvc        *media.Service
 	pluginMgr       *plugins.Manager
 	renderer        *templates.Renderer
+	settingsSvc     *settings.Service
+	emailSvc        *email.Service
+	usersPermSvc    *usersperm.Service
+	webhooksSvc     *webhooks.Service
 	cache           cache.Cache
 	workerPool      *jobs.WorkerPool
 	locSvc          *localization.Service
@@ -46,6 +57,8 @@ type Server struct {
 	auditSvc        *audit.Service
 	tenancySvc      *tenancy.Service
 	rateLimiter     *IPRateLimiter
+	authLimiter     *IPRateLimiter
+	dynamicCORS     *DynamicCORS
 	logger          *slog.Logger
 	router          *chi.Mux
 	httpServer      *http.Server
@@ -76,11 +89,15 @@ func NewServer(
 		if strings.HasSuffix(path, "/media/hls") {
 			return media.MaxHLSRequestBodyBytes
 		}
+		if mediaSvc != nil && (strings.HasSuffix(path, "/media") || strings.HasSuffix(path, "/media/upload")) {
+			return mediaSvc.MaxUploadRequestBodyBytes(context.Background())
+		}
 		return 32 << 20
 	}))
 
-	// Rate Limiting (50 req/sec, burst 100)
+	// Rate Limiting (50 req/sec global, 30 req/min auth endpoints)
 	rateLimiter := NewIPRateLimiter(50.0, 100)
+	authLimiter := NewIPRateLimiter(30.0/60.0, 20)
 	r.Use(rateLimiter.Middleware)
 
 	// 2. Metrics & Observability Middleware
@@ -90,19 +107,9 @@ func NewServer(
 	// 3. Timeout Middleware
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// 4. CORS Configuration
-	corsOrigins := cfg.Server.CORSAllowedOrigins
-	if len(corsOrigins) == 0 {
-		corsOrigins = []string{"*"}
-	}
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   corsOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Tenant-ID"},
-		ExposedHeaders:   []string{"Link", "X-Total-Count"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	// 4. Dynamic CORS Configuration
+	dynamicCORS := NewDynamicCORS(settings.DefaultCORSSettings(cfg.Server.CORSAllowedOrigins))
+	r.Use(dynamicCORS.Middleware)
 
 	// 5. Multi-Tenancy Middleware
 	tenancySvc := tenancy.NewService()
@@ -124,12 +131,314 @@ func NewServer(
 	jobQueue := jobs.NewQueue()
 	workerPool := jobs.NewWorkerPool(jobQueue, cfg.Jobs.Concurrency, cfg.Jobs.PollInterval, logger)
 
-	locSvc := localization.NewService()
+	var locRepo localization.Repository = localization.NewMemoryRepository()
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		locRepo = localization.NewSQLRepository(sqlDB)
+	}
+	locSvc := localization.NewServiceWithRepo(locRepo)
 
 	searchEngine := search.NewEngine()
 	searchIndexer := search.NewIndexer(searchEngine)
 
-	auditSvc := audit.NewService(nil)
+	var auditRepo audit.Repository
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		auditRepo = audit.NewSQLRepository(sqlDB)
+	}
+	auditSvc := audit.NewService(auditRepo)
+	if authSvc != nil {
+		authSvc.SetAuditRecorder(func(ctx context.Context, meta auth.AuditMeta, action, resourceType, resourceID string, details map[string]any, result string) {
+			actorType := "admin"
+			if meta.ActorID == "" {
+				actorType = "system"
+			}
+			_, _ = auditSvc.Record(ctx, audit.RecordParams{
+				ActorID:   meta.ActorID,
+				ActorType: actorType,
+				Action:    action,
+				Resource:  resourceType,
+				TargetID:  resourceID,
+				Metadata:  details,
+				IPAddress: meta.IP,
+				UserAgent: meta.UserAgent,
+				Result:    result,
+			})
+		})
+	}
+	if pluginMgr != nil {
+		pluginMgr.SetAuditRecorder(func(ctx context.Context, action, resourceType, resourceID string, metadata map[string]any) {
+			_, _ = auditSvc.Record(ctx, audit.RecordParams{
+				ActorID:   "system",
+				ActorType: "plugin",
+				Action:    action,
+				Resource:  resourceType,
+				TargetID:  resourceID,
+				Metadata:  metadata,
+				Result:    "success",
+			})
+		})
+	}
+
+	var settingsRepo settings.Repository = settings.NewMemoryRepository()
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		settingsRepo = settings.NewSQLRepository(sqlDB)
+	}
+	settingsSvc := settings.NewService(settingsRepo, cfg, auditSvc, settings.RuntimeStatusProvider{
+		CMSVersion: CMSVersion,
+		DatabaseStatus: func(ctx context.Context) (string, string, string) {
+			if db == nil {
+				return "memory", "in-memory", ""
+			}
+			if err := db.Ping(ctx); err != nil {
+				return db.DriverName(), "unhealthy", err.Error()
+			}
+			return db.DriverName(), "healthy", ""
+		},
+		MigrationsStatus: func(ctx context.Context) []settings.MigrationItem {
+			if db == nil {
+				return nil
+			}
+			runner := migrations.NewRunner(db)
+			runner.Register(migrations.DefaultMigrations(db.DriverName())...)
+			applied, pending, err := runner.Status(ctx)
+			if err != nil {
+				return nil
+			}
+			out := make([]settings.MigrationItem, 0, len(applied)+len(pending))
+			for _, rec := range applied {
+				out = append(out, settings.MigrationItem{
+					Version:   rec.Version,
+					Name:      rec.Name,
+					Applied:   true,
+					AppliedAt: rec.AppliedAt.UTC().Format(time.RFC3339),
+				})
+			}
+			for _, mig := range pending {
+				out = append(out, settings.MigrationItem{
+					Version: mig.Version,
+					Name:    mig.Name,
+					Applied: false,
+				})
+			}
+			return out
+		},
+		CacheStatus: func(context.Context) string {
+			if cacheInst == nil {
+				return "disabled"
+			}
+			return "healthy"
+		},
+		JobsStats: func() map[string]int {
+			return jobQueue.Stats()
+		},
+		ThemesInfo: func() (string, []string) {
+			if renderer == nil {
+				return cfg.Themes.ActiveTheme, nil
+			}
+			list := renderer.ListThemes()
+			active := cfg.Themes.ActiveTheme
+			installed := make([]string, 0, len(list))
+			for _, item := range list {
+				if slug, ok := item["slug"].(string); ok {
+					installed = append(installed, slug)
+					if isAct, ok := item["is_active"].(bool); ok && isAct {
+						active = slug
+					}
+				}
+			}
+			return active, installed
+		},
+		PluginsInfo: func() (int, int) {
+			if pluginMgr == nil {
+				return 0, 0
+			}
+			list := pluginMgr.List()
+			enabled := 0
+			for _, p := range list {
+				if p.Status == plugins.StatusEnabled {
+					enabled++
+				}
+			}
+			return len(list), enabled
+		},
+	})
+	if renderer != nil {
+		renderer.SetSiteInfoProvider(func() templates.SiteInfo {
+			pub := settingsSvc.GetPublicGeneral(context.Background())
+			return templates.SiteInfo{
+				Title:    pub.SiteName,
+				Tagline:  pub.SiteDescription,
+				BaseURL:  pub.PublicURL,
+				Language: pub.DefaultLocale,
+			}
+		})
+	}
+
+	if corsCfg, err := settingsSvc.GetCORSSettings(context.Background()); err == nil && corsCfg != nil {
+		dynamicCORS.Update(*corsCfg)
+	}
+	if rlCfg, err := settingsSvc.GetRateLimitSettings(context.Background()); err == nil && rlCfg != nil {
+		rateLimiter.UpdateConfig(rlCfg.Enabled, rlCfg.GlobalRequestsPerSec, rlCfg.GlobalBurst)
+		authLimiter.UpdateConfig(rlCfg.Enabled, float64(rlCfg.AuthRequestsPerMin)/60.0, rlCfg.AuthBurst)
+	}
+	settingsSvc.OnCORSUpdated(func(c settings.CORSSettings) {
+		dynamicCORS.Update(c)
+	})
+	settingsSvc.OnRateLimitUpdated(func(rl settings.RateLimitSettings) {
+		rateLimiter.UpdateConfig(rl.Enabled, rl.GlobalRequestsPerSec, rl.GlobalBurst)
+		authLimiter.UpdateConfig(rl.Enabled, float64(rl.AuthRequestsPerMin)/60.0, rl.AuthBurst)
+	})
+
+	if mediaSvc != nil {
+		mediaSvc.SetMediaSettingsProvider(func(ctx context.Context) (media.RuntimeConfig, error) {
+			ms, err := settingsSvc.GetMediaSettings(ctx)
+			if err != nil {
+				return media.RuntimeConfig{}, err
+			}
+			return media.RuntimeConfig{
+				MaxFileSizeBytes:       ms.MaxFileSizeBytes,
+				AllowedMIMETypes:       ms.AllowedMIMETypes,
+				ResponsiveSizesEnabled: ms.ResponsiveSizesEnabled,
+				GenerateSmall:          ms.GenerateSmall,
+				GenerateMedium:         ms.GenerateMedium,
+				GenerateLarge:          ms.GenerateLarge,
+				RequireAltText:         ms.RequireAltText,
+				DefaultFolderID:        ms.DefaultFolderID,
+				DefaultAccess:          ms.DefaultAccess,
+				SignedURLTTLSeconds:    ms.SignedURLTTLSeconds,
+			}, nil
+		})
+		if swappable, ok := mediaSvc.Storage().(*storage.SwappableProvider); ok {
+			if stCfg, decSecret, err := settingsSvc.ResolveStorageConfig(context.Background()); err == nil {
+				if p, err := settings.BuildStorageProvider(stCfg, decSecret); err == nil {
+					swappable.Swap(p)
+				} else {
+					logger.Warn("Failed to apply persisted storage settings; keeping fallback provider", "error", err)
+				}
+			}
+			settingsSvc.OnStorageUpdated(func(st settings.StorageSettings, decSecret string) {
+				p, err := settings.BuildStorageProvider(st, decSecret)
+				if err != nil {
+					logger.Error("Failed to hot-swap storage provider", "provider", st.ActiveProvider, "error", err)
+					return
+				}
+				swappable.Swap(p)
+				logger.Info("Active media storage provider hot-swapped", "provider", p.Name())
+			})
+		}
+	}
+
+	var emailRepo email.TemplateRepository = email.NewMemoryTemplateRepository()
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		emailRepo = email.NewSQLTemplateRepository(sqlDB)
+	}
+	emailSvc := email.NewService(settingsSvc, emailRepo, logger)
+
+	if authSvc != nil {
+		authSvc.SetSecurityPolicyProvider(func(ctx context.Context) auth.SecurityRuntimeConfig {
+			out := auth.DefaultSecurityRuntimeConfig()
+			if sec, err := settingsSvc.GetSecuritySettings(ctx); err == nil && sec != nil {
+				out.SessionTimeoutMinutes = sec.SessionTimeoutMinutes
+				out.MaxFailedLogins = sec.MaxFailedLogins
+				out.LockoutDurationMinutes = sec.LockoutDurationMinutes
+				out.EnforceAdminMFA = sec.EnforceAdminMFA
+				out.AllowedAdminIPCIDRs = append([]string{}, sec.AllowedAdminIPCIDRs...)
+			}
+			if pp, err := settingsSvc.GetPasswordPolicySettings(ctx); err == nil && pp != nil {
+				out.PasswordPolicy = auth.PasswordPolicy{
+					MinLength:        pp.MinLength,
+					RequireUppercase: pp.RequireUppercase,
+					RequireLowercase: pp.RequireLowercase,
+					RequireNumber:    pp.RequireNumber,
+					RequireSpecial:   pp.RequireSpecial,
+					MaxAgeDays:       pp.MaxAgeDays,
+				}
+			}
+			if sso, err := settingsSvc.GetSSOSettings(ctx); err == nil && sso != nil {
+				out.SSOEnabled = sso.Enabled
+				if sso.EnforceSSOForDomains {
+					out.SSOEnforcedDomains = append([]string{}, sso.AllowedDomains...)
+				}
+			}
+			return out
+		})
+		authSvc.SetInviteNotifier(func(ctx context.Context, inv *auth.AdminInvitation, rawToken string, actor *auth.User, expiresInHours int) error {
+			inviter := ""
+			if actor != nil {
+				inviter = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
+				if inviter == "" {
+					inviter = actor.Username
+				}
+				if inviter == "" {
+					inviter = actor.Email
+				}
+			}
+			return emailSvc.SendAdminInvitation(ctx, inv.Email, rawToken, inviter, expiresInHours)
+		})
+	}
+
+	var upRepo usersperm.Repository = usersperm.NewMemoryRepository()
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		upRepo = usersperm.NewSQLRepository(sqlDB)
+	}
+	usersPermSvc := usersperm.NewService(upRepo, settingsSvc, auditSvc, cfg, logger)
+	if err := usersPermSvc.SeedDefaults(context.Background()); err != nil {
+		logger.Warn("Failed to seed users-permissions defaults", "error", err)
+	}
+	usersPermSvc.SetEmailSender(emailSvc.SendTemplate)
+	if authSvc != nil {
+		usersPermSvc.SetAdminSSOLoginFunc(authSvc.CompleteSSOLogin)
+	}
+
+	locSvc.SetInUseChecker(func(ctx context.Context, code string) (bool, error) {
+		if gen, err := settingsSvc.GetGeneral(ctx); err == nil && strings.EqualFold(gen.DefaultLocale, code) {
+			return true, nil
+		}
+		sqlDB, ok := db.(interfaces.SQLDatabase)
+		if !ok || db == nil {
+			return false, nil
+		}
+		pattern := `%"` + code + `":%`
+		query := `SELECT draft_data, published_data FROM content_entries WHERE deleted_at IS NULL AND (CAST(draft_data AS TEXT) LIKE $1 OR CAST(published_data AS TEXT) LIKE $1) LIMIT 50`
+		if sqlDB.DriverName() != "postgres" {
+			query = `SELECT draft_data, published_data FROM content_entries WHERE deleted_at IS NULL AND (CAST(draft_data AS CHAR) LIKE ? OR CAST(published_data AS CHAR) LIKE ?) LIMIT 50`
+		}
+		var rows *sql.Rows
+		var err error
+		if sqlDB.DriverName() == "postgres" {
+			rows, err = sqlDB.QueryContext(ctx, query, pattern)
+		} else {
+			rows, err = sqlDB.QueryContext(ctx, query, pattern, pattern)
+		}
+		if err != nil {
+			return false, nil
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var draftRaw, pubRaw sql.NullString
+			if err := rows.Scan(&draftRaw, &pubRaw); err != nil {
+				continue
+			}
+			for _, raw := range []sql.NullString{draftRaw, pubRaw} {
+				if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+					continue
+				}
+				var m map[string]any
+				if err := json.Unmarshal([]byte(raw.String), &m); err == nil && jsonContainsLocaleKey(m, code) {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+
+	var whRepo webhooks.Repository = webhooks.NewMemoryRepository()
+	if sqlDB, ok := db.(interfaces.SQLDatabase); ok && db != nil {
+		whRepo = webhooks.NewSQLRepository(sqlDB)
+	}
+	webhooksSvc := webhooks.NewService(whRepo, settingsSvc.EncryptionKey, auditSvc, logger)
+	if contentSvc != nil && contentSvc.EventBus() != nil {
+		webhooksSvc.RegisterContentBus(contentSvc.EventBus())
+	}
 
 	// If content service is active, attach lifecycle hooks for cache invalidation & search indexing
 	if contentSvc != nil && contentSvc.EventBus() != nil {
@@ -168,6 +477,32 @@ func NewServer(
 	r.Get("/info", InfoHandler(cfg, db))
 
 	r.Route("/api/v1", func(api chi.Router) {
+		api.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					p := strings.TrimSuffix(r.URL.Path, "/")
+					if strings.HasSuffix(p, "/auth/login") ||
+						strings.HasSuffix(p, "/auth/register") ||
+						strings.HasSuffix(p, "/auth/invitations/accept") ||
+						strings.HasSuffix(p, "/auth/mfa/verify") ||
+						strings.HasSuffix(p, "/auth/reset-expired-password") ||
+						strings.HasSuffix(p, "/app-auth/login") ||
+						strings.HasSuffix(p, "/app-auth/register") ||
+						strings.HasSuffix(p, "/app-auth/forgot-password") ||
+						strings.HasSuffix(p, "/app-auth/reset-password") {
+						if !authLimiter.Allow(extractClientIP(r)) {
+							w.Header().Set("Content-Type", "application/json; charset=utf-8")
+							w.Header().Set("Retry-After", "60")
+							w.WriteHeader(http.StatusTooManyRequests)
+							_, _ = w.Write([]byte(`{"error":"too many authentication attempts, please slow down"}`))
+							return
+						}
+					}
+				}
+				next.ServeHTTP(w, r)
+			})
+		})
+
 		api.Get("/ping", PingHandler)
 		api.Get("/openapi.yaml", OpenAPIHandler)
 		if renderer != nil {
@@ -183,6 +518,20 @@ func NewServer(
 
 		if contentSvc != nil {
 			contentHandler := content.NewHandler(contentSvc)
+			contentHandler.SetRestAPISettingsProvider(func(ctx context.Context) content.RestAPIRuntimeConfig {
+				cfg, err := settingsSvc.GetRestAPISettings(ctx)
+				if err != nil || cfg == nil {
+					def := settings.DefaultRestAPISettings()
+					cfg = &def
+				}
+				return content.RestAPIRuntimeConfig{
+					DefaultLimit:       cfg.DefaultLimit,
+					MaxLimit:           cfg.MaxLimit,
+					WithCount:          cfg.WithCount,
+					MaxPopulateDepth:   cfg.MaxPopulateDepth,
+					ExposeDraftPreview: cfg.ExposeDraftPreview,
+				}
+			})
 			contentHandler.RegisterRoutes(api)
 		}
 
@@ -215,6 +564,23 @@ func NewServer(
 		// Multi-Tenancy Management
 		tenancyHandler := tenancy.NewHTTPHandler(tenancySvc)
 		tenancyHandler.RegisterRoutes(api)
+
+		// Settings & Preferences
+		settingsHandler := settings.NewHTTPHandler(settingsSvc)
+		settingsHandler.RegisterPublicRoutes(api)
+		settingsHandler.RegisterProtectedRoutes(api)
+
+		// Outbound Email & Templates
+		emailHandler := email.NewHTTPHandler(emailSvc)
+		emailHandler.RegisterProtectedRoutes(api)
+
+		// Isolated Application Users & Permissions + Admin SSO
+		usersPermHandler := usersperm.NewHandler(usersPermSvc)
+		usersPermHandler.RegisterRoutes(api)
+
+		// Outgoing Webhooks & Delivery Logs
+		webhooksHandler := webhooks.NewHandler(webhooksSvc)
+		webhooksHandler.RegisterRoutes(api)
 	})
 
 	// 7. Mount Static Uploaded Files
@@ -248,6 +614,10 @@ func NewServer(
 		mediaSvc:        mediaSvc,
 		pluginMgr:       pluginMgr,
 		renderer:        renderer,
+		settingsSvc:     settingsSvc,
+		emailSvc:        emailSvc,
+		usersPermSvc:    usersPermSvc,
+		webhooksSvc:     webhooksSvc,
 		cache:           cacheInst,
 		workerPool:      workerPool,
 		locSvc:          locSvc,
@@ -256,6 +626,8 @@ func NewServer(
 		auditSvc:        auditSvc,
 		tenancySvc:      tenancySvc,
 		rateLimiter:     rateLimiter,
+		authLimiter:     authLimiter,
+		dynamicCORS:     dynamicCORS,
 		logger:          logger,
 		router:          r,
 		httpServer:      httpSrv,
@@ -293,6 +665,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.rateLimiter != nil {
 		s.rateLimiter.Close()
 	}
+	if s.authLimiter != nil {
+		s.authLimiter.Close()
+	}
 	if s.workerPool != nil {
 		_ = s.workerPool.Stop(ctx)
 	}
@@ -316,6 +691,32 @@ func (s *Server) Jobs() *jobs.WorkerPool {
 // Localization returns the active content localization service.
 func (s *Server) Localization() *localization.Service {
 	return s.locSvc
+}
+
+// Webhooks returns the active outgoing webhook service.
+func (s *Server) Webhooks() *webhooks.Service {
+	return s.webhooksSvc
+}
+
+func jsonContainsLocaleKey(v any, code string) bool {
+	switch typed := v.(type) {
+	case map[string]any:
+		for k, val := range typed {
+			if strings.EqualFold(k, code) && len(k) >= 2 && len(k) <= 5 {
+				return true
+			}
+			if jsonContainsLocaleKey(val, code) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if jsonContainsLocaleKey(item, code) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Search returns the full-text search engine instance.

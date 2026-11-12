@@ -455,11 +455,11 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
         }
       }
 
-      // 2. Add newly staged fields
-      for (const field of stagedFields) {
-        if (!savedMap.has(field.field_key)) {
-          await contentTypesApi.addField(selectedType.uid, field);
-        }
+      // 2. Add newly staged fields (non-UID first so linked UID target_field exists even if reordered)
+      const fieldsToAdd = stagedFields.filter((field) => !savedMap.has(field.field_key));
+      fieldsToAdd.sort((a, b) => (a.field_type === 'uid' ? 1 : 0) - (b.field_type === 'uid' ? 1 : 0));
+      for (const field of fieldsToAdd) {
+        await contentTypesApi.addField(selectedType.uid, field);
       }
 
       // 3. Delete removed fields
