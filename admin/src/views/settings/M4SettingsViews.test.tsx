@@ -228,4 +228,126 @@ describe('M4 Settings Views', () => {
     fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
     await waitFor(() => expect(screen.getByText('Invite to Go CMS')).toBeInTheDocument());
   });
+
+  it('selects Cloudinary provider, validates, tests connection, and saves settings', async () => {
+    vi.mocked(endpoints.settingsApi.getStorage).mockResolvedValue({
+      data: {
+        active_provider: 'local',
+        local: { upload_dir: './uploads', url_prefix: '/uploads' },
+        s3: {
+          bucket: '',
+          region: 'us-east-1',
+          endpoint: '',
+          access_key_id: '',
+          secret_access_key: '',
+          secret_configured: false,
+          use_ssl: true,
+          force_path_style: false,
+          base_url: '',
+        },
+        cloudinary: {
+          cloud_name: '',
+          api_key: '',
+          api_secret: '',
+          secret_configured: false,
+          root_folder: '',
+          delivery_type: 'upload',
+          default_resource_type: 'auto',
+          use_secure_url: true,
+          upload_preset: '',
+          asset_naming_strategy: 'cms_key',
+          optimization_enabled: true,
+          default_format: 'auto',
+          default_quality: 'auto',
+        },
+        supported_providers: [
+          { id: 'local', label: 'Local Filesystem', implemented: true },
+          { id: 's3', label: 'Amazon S3', implemented: true },
+          { id: 'minio', label: 'MinIO / S3-Compatible', implemented: true },
+          { id: 'cloudinary', label: 'Cloudinary', implemented: true },
+          { id: 'gcs', label: 'Google Cloud Storage', implemented: false, reason: 'Unavailable' },
+          { id: 'azure', label: 'Azure Blob Storage', implemented: false, reason: 'Unavailable' },
+        ],
+      },
+    });
+    vi.mocked(endpoints.settingsApi.testStorage).mockResolvedValue({
+      data: {
+        ok: true,
+        provider: 'cloudinary',
+        latency_ms: 42,
+        message: 'Storage provider "cloudinary" is healthy and reachable.',
+      },
+    });
+    vi.mocked(endpoints.settingsApi.updateStorage).mockImplementation(async (payload) => ({
+      data: {
+        ...payload,
+        cloudinary: {
+          ...(payload.cloudinary || {
+            cloud_name: 'demo-cloud',
+            api_key: '123456',
+            root_folder: 'go-cms',
+            delivery_type: 'upload',
+            default_resource_type: 'auto',
+            use_secure_url: true,
+            optimization_enabled: true,
+          }),
+          api_secret: '__PRESERVE__',
+          secret_configured: true,
+        },
+      },
+    }));
+
+    let registeredHandlers: { save: () => Promise<void>; discard: () => void; isSaving: boolean } | null = null;
+    render(
+      <ToastProvider>
+        <StorageProvidersView
+          canEdit
+          onDirtyChange={vi.fn()}
+          registerHandlers={(h) => {
+            registeredHandlers = h;
+          }}
+        />
+      </ToastProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Cloudinary')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Cloudinary').closest('button')!);
+    expect(screen.getByText('Cloudinary Configuration')).toBeInTheDocument();
+
+    // Testing connection before entering credentials shows client-side validation error
+    fireEvent.click(screen.getByRole('button', { name: /Test Connection/i }));
+    await waitFor(() => expect(screen.getByText(/Cloudinary Cloud Name is required/i)).toBeInTheDocument());
+
+    // Enter valid Cloudinary credentials
+    fireEvent.change(screen.getByPlaceholderText('your-cloud-name'), {
+      target: { value: 'demo-cloud' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Cloudinary API Key'), {
+      target: { value: '123456' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Enter secret value'), {
+      target: { value: 'my-secret-token' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('go-cms'), {
+      target: { value: 'cms-prod' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Test Connection/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/Storage provider "cloudinary" is healthy and reachable/i)).toBeInTheDocument(),
+    );
+
+    await registeredHandlers!.save();
+    expect(endpoints.settingsApi.updateStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        active_provider: 'cloudinary',
+        cloudinary: expect.objectContaining({
+          cloud_name: 'demo-cloud',
+          api_key: '123456',
+          api_secret: 'my-secret-token',
+          root_folder: 'cms-prod',
+        }),
+      }),
+    );
+  });
 });

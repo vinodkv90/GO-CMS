@@ -48,15 +48,18 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		mediaRouter.With(auth.RequirePermission("update", "media")).Post("/folders/{id}/move", h.MoveFolder)
 
 		// Media assets routes
+		mediaRouter.With(auth.RequirePermission("read", "media")).Get("/capabilities", h.GetCapabilities)
 		mediaRouter.With(auth.RequirePermission("create", "media")).Post("/", h.Upload)
 		mediaRouter.With(auth.RequirePermission("create", "media")).Post("/upload", h.Upload)
 		mediaRouter.With(auth.RequirePermission("create", "media")).Post("/hls", h.UploadHLS)
 		mediaRouter.With(auth.RequirePermission("read", "media")).Get("/", h.List)
 		mediaRouter.With(auth.RequirePermission("read", "media")).Get("/{id}", h.Get)
 		mediaRouter.With(auth.RequirePermission("update", "media")).Patch("/{id}", h.Update)
+		mediaRouter.With(auth.RequirePermission("update", "media")).Post("/{id}/replace", h.ReplaceAsset)
 		mediaRouter.With(auth.RequirePermission("update", "media")).Post("/{id}/move", h.MoveAsset)
 		mediaRouter.With(auth.RequirePermission("delete", "media")).Delete("/{id}", h.Delete)
 		mediaRouter.With(auth.RequirePermission("read", "media")).Get("/{id}/signed-url", h.GetSignedURL)
+		mediaRouter.With(auth.RequirePermission("read", "media")).Get("/{id}/transform", h.GetTransformedURL)
 	})
 }
 
@@ -142,7 +145,7 @@ func (h *Handler) UploadHLS(w http.ResponseWriter, r *http.Request) {
 
 	asset, err := h.svc.UploadHLSPackage(r.Context(), file, header.Filename, header.Size, title, folderID)
 	if err != nil {
-		if errors.Is(err, ErrInvalidHLSPackage) || errors.Is(err, ErrZipBombDetected) || errors.Is(err, ErrHLSMissingSegment) || errors.Is(err, ErrPathTraversal) {
+		if errors.Is(err, ErrMediaValidation) || errors.Is(err, ErrInvalidHLSPackage) || errors.Is(err, ErrZipBombDetected) || errors.Is(err, ErrHLSMissingSegment) || errors.Is(err, ErrPathTraversal) {
 			h.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -313,6 +316,85 @@ func (h *Handler) GetSignedURL(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"signed_url": signedURL,
 		"expires_in": int(ttl.Seconds()),
+	})
+}
+
+// GetCapabilities reports feature support for the currently active storage backend.
+func (h *Handler) GetCapabilities(w http.ResponseWriter, r *http.Request) {
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"data": h.svc.Capabilities(),
+	})
+}
+
+// ReplaceAsset replaces an existing media file while preserving its ID and entry references.
+func (h *Handler) ReplaceAsset(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		h.writeError(w, http.StatusBadRequest, "Failed to parse multipart form: "+err.Error())
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "Form field 'file' is required")
+		return
+	}
+	defer file.Close()
+
+	altText := r.FormValue("alt_text")
+	caption := r.FormValue("caption")
+
+	asset, err := h.svc.ReplaceAsset(r.Context(), id, file, header.Filename, header.Size, altText, caption)
+	if err != nil {
+		if errors.Is(err, ErrAssetNotFound) {
+			h.writeError(w, http.StatusNotFound, "Media asset not found")
+			return
+		}
+		if errors.Is(err, ErrMediaValidation) {
+			h.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"data": asset,
+	})
+}
+
+// GetTransformedURL builds a validated transformed delivery URL for image/video assets.
+func (h *Handler) GetTransformedURL(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	q := r.URL.Query()
+	wVal, _ := strconv.Atoi(q.Get("w"))
+	hVal, _ := strconv.Atoi(q.Get("h"))
+	opts := storage.ImageTransformOptions{
+		Width:   wVal,
+		Height:  hVal,
+		Crop:    q.Get("crop"),
+		Format:  q.Get("format"),
+		Quality: q.Get("quality"),
+		Gravity: q.Get("gravity"),
+		DPR:     q.Get("dpr"),
+	}
+
+	transformedURL, err := h.svc.TransformAssetURL(r.Context(), id, opts)
+	if err != nil {
+		if errors.Is(err, ErrAssetNotFound) {
+			h.writeError(w, http.StatusNotFound, "Media asset not found")
+			return
+		}
+		if errors.Is(err, storage.ErrInvalidPath) {
+			h.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"url": transformedURL,
 	})
 }
 
@@ -554,8 +636,14 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Open file from storage
-	reader, err := h.svc.Storage().Open(r.Context(), key)
+	// Open file from registered local storage provider when available so legacy local uploads continue serving across driver switches
+	prov := h.svc.Storage()
+	if resolver, ok := prov.(storage.ProviderResolver); ok {
+		if lp, found := resolver.ResolveProvider("local"); found {
+			prov = lp
+		}
+	}
+	reader, err := prov.Open(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, storage.ErrFileNotFound) {
 			http.NotFound(w, r)

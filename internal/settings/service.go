@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"github.com/go-cms/cms/internal/audit"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/storage"
+	"github.com/go-cms/cms/internal/storage/cloudinary"
 	"github.com/go-cms/cms/internal/storage/local"
 	"github.com/go-cms/cms/internal/storage/s3"
 )
@@ -55,10 +58,11 @@ type Service struct {
 	securityCache      *SecuritySettings
 	passwordPolicyCache *PasswordPolicySettings
 	ssoCache           *SSOSettings
-	corsListeners      []func(CORSSettings)
-	rateLimitListeners []func(RateLimitSettings)
-	mediaListeners     []func(MediaSettings)
-	storageListeners   []func(StorageSettings, string)
+	corsListeners           []func(CORSSettings)
+	rateLimitListeners      []func(RateLimitSettings)
+	mediaListeners          []func(MediaSettings)
+	storageListeners        []func(StorageSettings, string)
+	storageSecretsListeners []func(StorageSettings, StorageSecrets)
 }
 
 // NewService constructs a settings Service.
@@ -599,6 +603,12 @@ func (s *Service) OnMediaUpdated(fn func(MediaSettings)) {
 	s.mu.Unlock()
 }
 
+// StorageSecrets carries decrypted storage credentials kept solely in server memory.
+type StorageSecrets struct {
+	S3SecretAccessKey   string
+	CloudinaryAPISecret string
+}
+
 // OnStorageUpdated registers a callback invoked whenever storage provider settings change.
 func (s *Service) OnStorageUpdated(fn func(StorageSettings, string)) {
 	if fn == nil {
@@ -606,6 +616,16 @@ func (s *Service) OnStorageUpdated(fn func(StorageSettings, string)) {
 	}
 	s.mu.Lock()
 	s.storageListeners = append(s.storageListeners, fn)
+	s.mu.Unlock()
+}
+
+// OnStorageUpdatedWithSecrets registers a callback receiving sanitized storage settings and all decrypted secrets.
+func (s *Service) OnStorageUpdatedWithSecrets(fn func(StorageSettings, StorageSecrets)) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.storageSecretsListeners = append(s.storageSecretsListeners, fn)
 	s.mu.Unlock()
 }
 
@@ -639,11 +659,65 @@ func (s *Service) UpdateMediaSettings(ctx context.Context, input MediaSettings, 
 	return saved, nil
 }
 
-func (s *Service) loadRawStorageSettings(ctx context.Context) (*StorageSettings, error) {
-	return loadTypedSetting(s, ctx, KeyStorage, &s.storageCache, s.defaultStorageSettings, func(v *StorageSettings, ts time.Time) { v.UpdatedAt = ts })
+func applyCloudinaryEnvFallback(cfg *StorageSettings) string {
+	envCloud, envKey, envSecret := readCloudinaryEnv()
+	if cfg.Cloudinary.CloudName == "" && envCloud != "" {
+		cfg.Cloudinary.CloudName = envCloud
+	}
+	if cfg.Cloudinary.APIKey == "" && envKey != "" {
+		cfg.Cloudinary.APIKey = envKey
+	}
+	if cfg.Cloudinary.DeliveryType == "" {
+		cfg.Cloudinary.DeliveryType = "upload"
+	}
+	if cfg.Cloudinary.DefaultResourceType == "" {
+		cfg.Cloudinary.DefaultResourceType = "auto"
+	}
+	if cfg.Cloudinary.AssetNamingStrategy == "" {
+		cfg.Cloudinary.AssetNamingStrategy = "cms_key"
+	}
+	if cfg.Cloudinary.APISecretEnc == "" && envSecret != "" {
+		cfg.Cloudinary.SecretConfigured = true
+		return envSecret
+	}
+	return ""
 }
 
-// GetStorageSettings returns sanitized storage settings (with S3 secrets replaced by sentinel when configured).
+func readCloudinaryEnv() (cloudName, apiKey, apiSecret string) {
+	if rawURL := strings.TrimSpace(os.Getenv("CLOUDINARY_URL")); rawURL != "" {
+		if u, err := url.Parse(rawURL); err == nil && strings.EqualFold(u.Scheme, "cloudinary") {
+			cloudName = strings.TrimSpace(u.Host)
+			if u.User != nil {
+				apiKey = strings.TrimSpace(u.User.Username())
+				if pass, ok := u.User.Password(); ok {
+					apiSecret = strings.TrimSpace(pass)
+				}
+			}
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("CLOUDINARY_CLOUD_NAME")); v != "" {
+		cloudName = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CLOUDINARY_API_KEY")); v != "" {
+		apiKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CLOUDINARY_API_SECRET")); v != "" {
+		apiSecret = v
+	}
+	return cloudName, apiKey, apiSecret
+}
+
+func (s *Service) loadRawStorageSettings(ctx context.Context) (*StorageSettings, error) {
+	raw, err := loadTypedSetting(s, ctx, KeyStorage, &s.storageCache, s.defaultStorageSettings, func(v *StorageSettings, ts time.Time) { v.UpdatedAt = ts })
+	if err != nil {
+		return nil, err
+	}
+	copied := *raw
+	applyCloudinaryEnvFallback(&copied)
+	return &copied, nil
+}
+
+// GetStorageSettings returns sanitized storage settings (with secrets replaced by sentinel when configured).
 func (s *Service) GetStorageSettings(ctx context.Context) (*StorageSettings, error) {
 	raw, err := s.loadRawStorageSettings(ctx)
 	if err != nil {
@@ -653,91 +727,184 @@ func (s *Service) GetStorageSettings(ctx context.Context) (*StorageSettings, err
 	return &sanitized, nil
 }
 
-// ResolveStorageConfig returns persisted storage config and decrypted S3 secret access key for runtime wiring.
+// ResolveStorageConfig returns persisted storage config and the decrypted secret for S3 (or Cloudinary if active).
 func (s *Service) ResolveStorageConfig(ctx context.Context) (StorageSettings, string, error) {
-	raw, err := s.loadRawStorageSettings(ctx)
+	sanitized, secrets, err := s.ResolveStorageWithSecrets(ctx)
 	if err != nil {
 		return StorageSettings{}, "", err
 	}
-	secret := ""
-	if raw.S3.SecretAccessKeyEnc != "" {
-		dec, err := DecryptSecret(s.EncryptionKey(), raw.S3.SecretAccessKeyEnc)
-		if err != nil {
-			return StorageSettings{}, "", fmt.Errorf("failed to decrypt stored S3 secret_access_key: %w", err)
-		}
-		secret = dec
+	if sanitized.ActiveProvider == "cloudinary" {
+		return sanitized, secrets.CloudinaryAPISecret, nil
 	}
-	return raw.Sanitized(), secret, nil
+	return sanitized, secrets.S3SecretAccessKey, nil
 }
 
-// UpdateStorageSettings validates, encrypts S3 secret, persists, notifies listeners, and returns sanitized settings.
+// ResolveStorageWithSecrets returns sanitized storage config along with decrypted runtime secrets for all providers.
+func (s *Service) ResolveStorageWithSecrets(ctx context.Context) (StorageSettings, StorageSecrets, error) {
+	raw, err := loadTypedSetting(s, ctx, KeyStorage, &s.storageCache, s.defaultStorageSettings, func(v *StorageSettings, ts time.Time) { v.UpdatedAt = ts })
+	if err != nil {
+		return StorageSettings{}, StorageSecrets{}, err
+	}
+
+	copied := *raw
+	envCloudSecret := applyCloudinaryEnvFallback(&copied)
+
+	var secrets StorageSecrets
+	if copied.S3.SecretAccessKeyEnc != "" {
+		dec, err := DecryptSecret(s.EncryptionKey(), copied.S3.SecretAccessKeyEnc)
+		if err != nil {
+			return StorageSettings{}, StorageSecrets{}, fmt.Errorf("failed to decrypt stored S3 secret_access_key: %w", err)
+		}
+		secrets.S3SecretAccessKey = dec
+	}
+	if copied.Cloudinary.APISecretEnc != "" {
+		dec, err := DecryptSecret(s.EncryptionKey(), copied.Cloudinary.APISecretEnc)
+		if err != nil {
+			return StorageSettings{}, StorageSecrets{}, fmt.Errorf("failed to decrypt stored Cloudinary api_secret: %w", err)
+		}
+		secrets.CloudinaryAPISecret = dec
+	} else if envCloudSecret != "" {
+		secrets.CloudinaryAPISecret = envCloudSecret
+	}
+
+	return copied.Sanitized(), secrets, nil
+}
+
+// UpdateStorageSettings validates, encrypts secrets, persists, notifies listeners, and returns sanitized settings.
 func (s *Service) UpdateStorageSettings(ctx context.Context, input StorageSettings, meta AuditMeta) (*StorageSettings, error) {
 	if err := input.NormalizeAndValidate(); err != nil {
 		return nil, err
 	}
 
-	existing, err := s.loadRawStorageSettings(ctx)
+	existing, err := loadTypedSetting(s, ctx, KeyStorage, &s.storageCache, s.defaultStorageSettings, func(v *StorageSettings, ts time.Time) { v.UpdatedAt = ts })
 	if err != nil {
 		return nil, err
 	}
 
 	encKey := s.EncryptionKey()
-	newEnc := ""
-	decryptedSecret := ""
+	newS3Enc := ""
+	decryptedS3Secret := ""
 
 	switch input.S3.SecretAccessKey {
 	case SecretPreserveSentinel:
-		newEnc = existing.S3.SecretAccessKeyEnc
-		if newEnc != "" {
-			decryptedSecret, err = DecryptSecret(encKey, newEnc)
+		newS3Enc = existing.S3.SecretAccessKeyEnc
+		if newS3Enc != "" {
+			decryptedS3Secret, err = DecryptSecret(encKey, newS3Enc)
 			if err != nil {
 				return nil, fmt.Errorf("stored S3 secret cannot be decrypted with current key; please re-enter it")
 			}
 		}
 	case "":
-		newEnc = ""
+		newS3Enc = ""
 	default:
-		decryptedSecret = input.S3.SecretAccessKey
-		newEnc, err = EncryptSecret(encKey, decryptedSecret)
+		decryptedS3Secret = input.S3.SecretAccessKey
+		newS3Enc, err = EncryptSecret(encKey, decryptedS3Secret)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if (input.ActiveProvider == "s3" || input.ActiveProvider == "minio") && newEnc == "" {
+	newCloudEnc := ""
+	decryptedCloudSecret := ""
+	switch input.Cloudinary.APISecret {
+	case SecretPreserveSentinel:
+		newCloudEnc = existing.Cloudinary.APISecretEnc
+		if newCloudEnc != "" {
+			decryptedCloudSecret, err = DecryptSecret(encKey, newCloudEnc)
+			if err != nil {
+				return nil, fmt.Errorf("stored Cloudinary api_secret cannot be decrypted with current key; please re-enter it")
+			}
+		} else {
+			_, _, envSecret := readCloudinaryEnv()
+			if envSecret != "" {
+				decryptedCloudSecret = envSecret
+			}
+		}
+	case "":
+		newCloudEnc = ""
+	default:
+		decryptedCloudSecret = strings.TrimSpace(input.Cloudinary.APISecret)
+		newCloudEnc, err = EncryptSecret(encKey, decryptedCloudSecret)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if (input.ActiveProvider == "s3" || input.ActiveProvider == "minio") && newS3Enc == "" {
 		return nil, fmt.Errorf("s3 secret_access_key is required for provider %s", input.ActiveProvider)
+	}
+	if input.ActiveProvider == "cloudinary" && newCloudEnc == "" && decryptedCloudSecret == "" {
+		return nil, fmt.Errorf("cloudinary api_secret is required for provider cloudinary")
 	}
 
 	toSave := input
 	toSave.SupportedProviders = nil
 	toSave.S3.SecretAccessKey = ""
-	toSave.S3.SecretAccessKeyEnc = newEnc
-	toSave.S3.SecretConfigured = newEnc != ""
+	toSave.S3.SecretAccessKeyEnc = newS3Enc
+	toSave.S3.SecretConfigured = newS3Enc != ""
+	toSave.Cloudinary.APISecret = ""
+	toSave.Cloudinary.APISecretEnc = newCloudEnc
+	toSave.Cloudinary.SecretConfigured = newCloudEnc != "" || decryptedCloudSecret != ""
 
 	savedRaw, err := saveTypedSetting(s, ctx, KeyStorage, toSave, func(v *StorageSettings, ts time.Time) { v.UpdatedAt = ts }, &s.storageCache, meta, "settings:storage", map[string]any{
-		"active_provider":   toSave.ActiveProvider,
-		"local_upload_dir":  toSave.Local.UploadDir,
-		"s3_bucket":         toSave.S3.Bucket,
-		"s3_region":         toSave.S3.Region,
-		"s3_endpoint":       toSave.S3.Endpoint,
-		"secret_configured": toSave.S3.SecretConfigured,
+		"active_provider":              toSave.ActiveProvider,
+		"local_upload_dir":             toSave.Local.UploadDir,
+		"s3_bucket":                    toSave.S3.Bucket,
+		"s3_region":                    toSave.S3.Region,
+		"s3_endpoint":                  toSave.S3.Endpoint,
+		"secret_configured":            toSave.S3.SecretConfigured,
+		"cloudinary_cloud_name":        toSave.Cloudinary.CloudName,
+		"cloudinary_root_folder":       toSave.Cloudinary.RootFolder,
+		"cloudinary_delivery_type":     toSave.Cloudinary.DeliveryType,
+		"cloudinary_secret_configured": toSave.Cloudinary.SecretConfigured,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	sanitized := savedRaw.Sanitized()
+	copied := *savedRaw
+	if decryptedCloudSecret == "" {
+		if envSec := applyCloudinaryEnvFallback(&copied); envSec != "" {
+			decryptedCloudSecret = envSec
+		}
+	} else {
+		copied.Cloudinary.SecretConfigured = true
+	}
+
+	sanitized := copied.Sanitized()
+	secrets := StorageSecrets{
+		S3SecretAccessKey:   decryptedS3Secret,
+		CloudinaryAPISecret: decryptedCloudSecret,
+	}
+	legacySecret := decryptedS3Secret
+	if sanitized.ActiveProvider == "cloudinary" {
+		legacySecret = decryptedCloudSecret
+	}
+
 	s.mu.RLock()
 	listeners := append([]func(StorageSettings, string){}, s.storageListeners...)
+	secListeners := append([]func(StorageSettings, StorageSecrets){}, s.storageSecretsListeners...)
 	s.mu.RUnlock()
 	for _, fn := range listeners {
-		fn(sanitized, decryptedSecret)
+		fn(sanitized, legacySecret)
+	}
+	for _, fn := range secListeners {
+		fn(sanitized, secrets)
 	}
 	return &sanitized, nil
 }
 
-// BuildStorageProvider constructs a StorageProvider from validated storage settings and plaintext secret.
+// BuildStorageProvider constructs the active StorageProvider from validated settings and active secret.
 func BuildStorageProvider(cfg StorageSettings, decryptedSecret string) (storage.StorageProvider, error) {
+	secrets := StorageSecrets{S3SecretAccessKey: decryptedSecret}
+	if strings.EqualFold(strings.TrimSpace(cfg.ActiveProvider), "cloudinary") {
+		secrets.CloudinaryAPISecret = decryptedSecret
+	}
+	return BuildStorageProviderWithSecrets(cfg, secrets)
+}
+
+// BuildStorageProviderWithSecrets constructs the active StorageProvider from validated settings and decrypted secrets.
+func BuildStorageProviderWithSecrets(cfg StorageSettings, secrets StorageSecrets) (storage.StorageProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.ActiveProvider)) {
 	case "", "local":
 		return local.New(cfg.Local.UploadDir, cfg.Local.URLPrefix)
@@ -748,29 +915,92 @@ func BuildStorageProvider(cfg StorageSettings, decryptedSecret string) (storage.
 			Region:          cfg.S3.Region,
 			Endpoint:        cfg.S3.Endpoint,
 			AccessKeyID:     cfg.S3.AccessKeyID,
-			SecretAccessKey: decryptedSecret,
+			SecretAccessKey: secrets.S3SecretAccessKey,
 			UseSSL:          cfg.S3.UseSSL,
 			ForcePathStyle:  cfg.S3.ForcePathStyle,
 			BaseURL:         cfg.S3.BaseURL,
 			HTTPClient:      &http.Client{Timeout: 10 * time.Second},
+		})
+	case "cloudinary":
+		return cloudinary.New(cloudinary.Config{
+			CloudName:           cfg.Cloudinary.CloudName,
+			APIKey:              cfg.Cloudinary.APIKey,
+			APISecret:           secrets.CloudinaryAPISecret,
+			RootFolder:          cfg.Cloudinary.RootFolder,
+			DeliveryType:        cfg.Cloudinary.DeliveryType,
+			DefaultResourceType: cfg.Cloudinary.DefaultResourceType,
+			UseSecureURL:        cfg.Cloudinary.UseSecureURL,
+			UploadPreset:        cfg.Cloudinary.UploadPreset,
+			AssetNamingStrategy: cfg.Cloudinary.AssetNamingStrategy,
+			OptimizationEnabled: cfg.Cloudinary.OptimizationEnabled,
+			DefaultFormat:       cfg.Cloudinary.DefaultFormat,
+			DefaultQuality:      cfg.Cloudinary.DefaultQuality,
+			MaxWidth:            cfg.Cloudinary.MaxWidth,
+			APIBaseURL:          cfg.Cloudinary.APIBaseURL,
+			AllowInsecureHTTP:   strings.HasPrefix(cfg.Cloudinary.APIBaseURL, "http://"),
 		})
 	default:
 		return nil, fmt.Errorf("unsupported storage provider %q", cfg.ActiveProvider)
 	}
 }
 
+// BuildConfiguredProviders instantiates every configured storage provider (local, s3/minio, cloudinary)
+// so existing assets remain accessible/deletable even after switching active drivers.
+func BuildConfiguredProviders(cfg StorageSettings, secrets StorageSecrets) []storage.StorageProvider {
+	out := make([]storage.StorageProvider, 0, 4)
+
+	localCopy := cfg
+	localCopy.ActiveProvider = "local"
+	if lp, err := BuildStorageProviderWithSecrets(localCopy, secrets); err == nil {
+		out = append(out, lp)
+	}
+
+	if cfg.S3.Bucket != "" && cfg.S3.AccessKeyID != "" && secrets.S3SecretAccessKey != "" {
+		s3Name := "s3"
+		if cfg.S3.Endpoint != "" && strings.EqualFold(cfg.ActiveProvider, "minio") {
+			s3Name = "minio"
+		}
+		s3Copy := cfg
+		s3Copy.ActiveProvider = s3Name
+		if sp, err := BuildStorageProviderWithSecrets(s3Copy, secrets); err == nil {
+			out = append(out, sp)
+		}
+		if s3Name == "minio" {
+			s3Alt := cfg
+			s3Alt.ActiveProvider = "s3"
+			if sp2, err := BuildStorageProviderWithSecrets(s3Alt, secrets); err == nil {
+				out = append(out, sp2)
+			}
+		} else if cfg.S3.Endpoint != "" {
+			minioAlt := cfg
+			minioAlt.ActiveProvider = "minio"
+			if mp, err := BuildStorageProviderWithSecrets(minioAlt, secrets); err == nil {
+				out = append(out, mp)
+			}
+		}
+	}
+
+	if cfg.Cloudinary.CloudName != "" && cfg.Cloudinary.APIKey != "" && secrets.CloudinaryAPISecret != "" {
+		cloudCopy := cfg
+		cloudCopy.ActiveProvider = "cloudinary"
+		if cp, err := BuildStorageProviderWithSecrets(cloudCopy, secrets); err == nil {
+			out = append(out, cp)
+		}
+	}
+
+	return out
+}
+
 // TestStorageConnection instantiates the specified (or currently configured) storage provider and verifies health.
 func (s *Service) TestStorageConnection(ctx context.Context, override *StorageSettings) (*StorageTestResult, error) {
 	var target StorageSettings
-	var secret string
 
-	stored, storedSecret, err := s.ResolveStorageConfig(ctx)
+	stored, secrets, err := s.ResolveStorageWithSecrets(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if override == nil {
 		target = stored
-		secret = storedSecret
 	} else {
 		target = *override
 		if err := target.NormalizeAndValidate(); err != nil {
@@ -778,18 +1008,31 @@ func (s *Service) TestStorageConnection(ctx context.Context, override *StorageSe
 		}
 		switch target.S3.SecretAccessKey {
 		case SecretPreserveSentinel:
-			secret = storedSecret
+			// keep stored secrets.S3SecretAccessKey
 		case "":
-			secret = ""
+			secrets.S3SecretAccessKey = ""
 		default:
-			secret = target.S3.SecretAccessKey
+			secrets.S3SecretAccessKey = target.S3.SecretAccessKey
 		}
-		if (target.ActiveProvider == "s3" || target.ActiveProvider == "minio") && secret == "" {
+
+		switch target.Cloudinary.APISecret {
+		case SecretPreserveSentinel:
+			// keep stored secrets.CloudinaryAPISecret
+		case "":
+			secrets.CloudinaryAPISecret = ""
+		default:
+			secrets.CloudinaryAPISecret = strings.TrimSpace(target.Cloudinary.APISecret)
+		}
+
+		if (target.ActiveProvider == "s3" || target.ActiveProvider == "minio") && secrets.S3SecretAccessKey == "" {
 			return nil, fmt.Errorf("s3 secret_access_key is required to test %s connection", target.ActiveProvider)
+		}
+		if target.ActiveProvider == "cloudinary" && secrets.CloudinaryAPISecret == "" {
+			return nil, fmt.Errorf("cloudinary api_secret is required to test cloudinary connection")
 		}
 	}
 
-	provider, err := BuildStorageProvider(target, secret)
+	provider, err := BuildStorageProviderWithSecrets(target, secrets)
 	if err != nil {
 		return &StorageTestResult{
 			OK:       false,

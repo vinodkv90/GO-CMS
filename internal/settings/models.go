@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -608,6 +609,26 @@ type S3StorageSettings struct {
 	BaseURL            string `json:"base_url"`
 }
 
+// CloudinaryStorageSettings configures Cloudinary cloud media storage and delivery defaults.
+type CloudinaryStorageSettings struct {
+	CloudName           string `json:"cloud_name"`
+	APIKey              string `json:"api_key"`
+	APISecret           string `json:"api_secret,omitempty"`
+	APISecretEnc        string `json:"api_secret_enc,omitempty"`
+	SecretConfigured    bool   `json:"secret_configured"`
+	RootFolder          string `json:"root_folder"`
+	DeliveryType        string `json:"delivery_type"`         // upload, authenticated, private
+	DefaultResourceType string `json:"default_resource_type"` // auto, image, video, raw
+	UseSecureURL        bool   `json:"use_secure_url"`
+	UploadPreset        string `json:"upload_preset,omitempty"`
+	AssetNamingStrategy string `json:"asset_naming_strategy,omitempty"` // cms_key, original_filename, random_id
+	OptimizationEnabled bool   `json:"optimization_enabled"`
+	DefaultFormat       string `json:"default_format,omitempty"`
+	DefaultQuality      string `json:"default_quality,omitempty"`
+	MaxWidth            int    `json:"max_width,omitempty"`
+	APIBaseURL          string `json:"api_base_url,omitempty"`
+}
+
 // StorageTestResult captures connectivity test results for storage providers.
 type StorageTestResult struct {
 	OK        bool   `json:"ok"`
@@ -621,6 +642,7 @@ type StorageSettings struct {
 	ActiveProvider     string                      `json:"active_provider"`
 	Local              LocalStorageSettings        `json:"local"`
 	S3                 S3StorageSettings           `json:"s3"`
+	Cloudinary         CloudinaryStorageSettings   `json:"cloudinary"`
 	SupportedProviders []StorageProviderCapability `json:"supported_providers,omitempty"`
 	UpdatedAt          time.Time                   `json:"updated_at,omitempty"`
 }
@@ -631,12 +653,13 @@ func SupportedStorageProviders() []StorageProviderCapability {
 		{ID: "local", Label: "Local Filesystem", Implemented: true},
 		{ID: "s3", Label: "Amazon S3", Implemented: true},
 		{ID: "minio", Label: "MinIO / S3-Compatible", Implemented: true},
+		{ID: "cloudinary", Label: "Cloudinary", Implemented: true},
 		{ID: "gcs", Label: "Google Cloud Storage", Implemented: false, Reason: "Google Cloud Storage driver is not included in this build."},
 		{ID: "azure", Label: "Azure Blob Storage", Implemented: false, Reason: "Azure Blob Storage driver is not included in this build."},
 	}
 }
 
-// DefaultStorageSettings builds baseline local/S3 storage provider configuration.
+// DefaultStorageSettings builds baseline local/S3/Cloudinary storage provider configuration.
 func DefaultStorageSettings(uploadDir string) StorageSettings {
 	uploadDir = strings.TrimSpace(uploadDir)
 	if uploadDir == "" {
@@ -651,6 +674,15 @@ func DefaultStorageSettings(uploadDir string) StorageSettings {
 		S3: S3StorageSettings{
 			Region: "us-east-1",
 			UseSSL: true,
+		},
+		Cloudinary: CloudinaryStorageSettings{
+			DeliveryType:        "upload",
+			DefaultResourceType: "auto",
+			UseSecureURL:        true,
+			AssetNamingStrategy: "cms_key",
+			OptimizationEnabled: true,
+			DefaultFormat:       "auto",
+			DefaultQuality:      "auto",
 		},
 		SupportedProviders: SupportedStorageProviders(),
 	}
@@ -667,9 +699,21 @@ func (s StorageSettings) Sanitized() StorageSettings {
 	} else {
 		out.S3.SecretAccessKey = ""
 	}
+
+	cloudConfigured := out.Cloudinary.APISecretEnc != "" || out.Cloudinary.SecretConfigured
+	out.Cloudinary.SecretConfigured = cloudConfigured
+	out.Cloudinary.APISecretEnc = ""
+	if cloudConfigured {
+		out.Cloudinary.APISecret = SecretPreserveSentinel
+	} else {
+		out.Cloudinary.APISecret = ""
+	}
+
 	out.SupportedProviders = SupportedStorageProviders()
 	return out
 }
+
+var cloudinaryCloudNameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 // NormalizeAndValidate validates storage provider selection and connection fields.
 func (s *StorageSettings) NormalizeAndValidate() error {
@@ -678,7 +722,7 @@ func (s *StorageSettings) NormalizeAndValidate() error {
 		s.ActiveProvider = "local"
 	}
 	switch s.ActiveProvider {
-	case "local", "s3", "minio":
+	case "local", "s3", "minio", "cloudinary":
 	case "gcs", "azure":
 		return fmt.Errorf("storage provider %q is not implemented in this server build", s.ActiveProvider)
 	default:
@@ -735,6 +779,83 @@ func (s *StorageSettings) NormalizeAndValidate() error {
 		}
 		if s.ActiveProvider == "minio" && s.S3.Endpoint == "" {
 			return fmt.Errorf("s3 endpoint is required for MinIO provider")
+		}
+	}
+
+	s.Cloudinary.CloudName = strings.TrimSpace(s.Cloudinary.CloudName)
+	s.Cloudinary.APIKey = strings.TrimSpace(s.Cloudinary.APIKey)
+	s.Cloudinary.RootFolder = strings.Trim(strings.TrimSpace(s.Cloudinary.RootFolder), "/")
+	for strings.Contains(s.Cloudinary.RootFolder, "//") {
+		s.Cloudinary.RootFolder = strings.ReplaceAll(s.Cloudinary.RootFolder, "//", "/")
+	}
+	s.Cloudinary.DeliveryType = strings.ToLower(strings.TrimSpace(s.Cloudinary.DeliveryType))
+	if s.Cloudinary.DeliveryType == "" {
+		s.Cloudinary.DeliveryType = "upload"
+	}
+	s.Cloudinary.DefaultResourceType = strings.ToLower(strings.TrimSpace(s.Cloudinary.DefaultResourceType))
+	if s.Cloudinary.DefaultResourceType == "" {
+		s.Cloudinary.DefaultResourceType = "auto"
+	}
+	s.Cloudinary.UploadPreset = strings.TrimSpace(s.Cloudinary.UploadPreset)
+	s.Cloudinary.AssetNamingStrategy = strings.ToLower(strings.TrimSpace(s.Cloudinary.AssetNamingStrategy))
+	if s.Cloudinary.AssetNamingStrategy == "" {
+		s.Cloudinary.AssetNamingStrategy = "cms_key"
+	}
+	s.Cloudinary.DefaultFormat = strings.ToLower(strings.TrimSpace(s.Cloudinary.DefaultFormat))
+	s.Cloudinary.DefaultQuality = strings.ToLower(strings.TrimSpace(s.Cloudinary.DefaultQuality))
+	s.Cloudinary.APIBaseURL = strings.TrimRight(strings.TrimSpace(s.Cloudinary.APIBaseURL), "/")
+
+	if strings.Contains(s.Cloudinary.RootFolder, "..") || strings.Contains(s.Cloudinary.RootFolder, "\\") || strings.ContainsRune(s.Cloudinary.RootFolder, '\x00') {
+		return fmt.Errorf("invalid cloudinary root_folder")
+	}
+	switch s.Cloudinary.DeliveryType {
+	case "upload", "authenticated", "private":
+	default:
+		return fmt.Errorf("invalid cloudinary delivery_type %q", s.Cloudinary.DeliveryType)
+	}
+	switch s.Cloudinary.DefaultResourceType {
+	case "auto", "image", "video", "raw":
+	default:
+		return fmt.Errorf("invalid cloudinary default_resource_type %q", s.Cloudinary.DefaultResourceType)
+	}
+	switch s.Cloudinary.AssetNamingStrategy {
+	case "cms_key", "original_filename", "random_id":
+	default:
+		return fmt.Errorf("invalid cloudinary asset_naming_strategy %q", s.Cloudinary.AssetNamingStrategy)
+	}
+	if s.Cloudinary.DefaultFormat != "" {
+		switch s.Cloudinary.DefaultFormat {
+		case "auto", "webp", "avif", "jpg", "jpeg", "png", "gif":
+		default:
+			return fmt.Errorf("invalid cloudinary default_format %q", s.Cloudinary.DefaultFormat)
+		}
+	}
+	if s.Cloudinary.DefaultQuality != "" {
+		switch s.Cloudinary.DefaultQuality {
+		case "auto", "auto:best", "auto:good", "auto:eco", "auto:low":
+		default:
+			n, err := strconv.Atoi(s.Cloudinary.DefaultQuality)
+			if err != nil || n < 1 || n > 100 {
+				return fmt.Errorf("invalid cloudinary default_quality %q", s.Cloudinary.DefaultQuality)
+			}
+		}
+	}
+	if s.Cloudinary.MaxWidth < 0 || s.Cloudinary.MaxWidth > 10000 {
+		return fmt.Errorf("cloudinary max_width must be between 0 and 10000")
+	}
+	if s.Cloudinary.APIBaseURL != "" {
+		u, err := url.Parse(s.Cloudinary.APIBaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("invalid cloudinary api_base_url")
+		}
+	}
+
+	if s.ActiveProvider == "cloudinary" {
+		if !cloudinaryCloudNameRegexp.MatchString(s.Cloudinary.CloudName) {
+			return fmt.Errorf("cloudinary cloud_name is required and must be alphanumeric/hyphen/underscore")
+		}
+		if s.Cloudinary.APIKey == "" {
+			return fmt.Errorf("cloudinary api_key is required")
 		}
 	}
 	return nil

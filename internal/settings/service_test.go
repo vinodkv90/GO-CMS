@@ -2,6 +2,9 @@ package settings
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-cms/cms/internal/audit"
@@ -335,13 +338,140 @@ func TestMediaAndStorageSettingsAndSecretPreservation(t *testing.T) {
 	assert.Equal(t, SecretPreserveSentinel, fetched.S3.SecretAccessKey)
 	assert.NotContains(t, fetched.S3.SecretAccessKey, "super-secret-s3-value")
 	var foundGCS bool
+	var foundCloudinary bool
 	for _, capItem := range fetched.SupportedProviders {
 		if capItem.ID == "gcs" {
 			foundGCS = true
 			assert.False(t, capItem.Implemented)
 		}
+		if capItem.ID == "cloudinary" {
+			foundCloudinary = true
+			assert.True(t, capItem.Implemented)
+		}
 	}
 	assert.True(t, foundGCS)
+	assert.True(t, foundCloudinary)
+}
+
+func TestSettingsService_CloudinaryStorageAndConnection(t *testing.T) {
+	ctx := context.Background()
+	auditSvc := audit.NewService(nil)
+	cfg := config.DefaultConfig()
+	svc := NewService(NewMemoryRepository(), cfg, auditSvc, RuntimeStatusProvider{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1_1/demo-cloud/ping" {
+			user, pass, ok := r.BasicAuth()
+			if ok && user == "cloud-key-1" && pass == "cloud-secret-xyz" {
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// Missing api_secret fails cleanly
+	_, err := svc.UpdateStorageSettings(ctx, StorageSettings{
+		ActiveProvider: "cloudinary",
+		Cloudinary: CloudinaryStorageSettings{
+			CloudName: "demo-cloud",
+			APIKey:    "cloud-key-1",
+		},
+	}, AuditMeta{ActorID: "admin-1"})
+	assert.Error(t, err)
+
+	var gotSecrets StorageSecrets
+	svc.OnStorageUpdatedWithSecrets(func(_ StorageSettings, sec StorageSecrets) {
+		gotSecrets = sec
+	})
+
+	saved, err := svc.UpdateStorageSettings(ctx, StorageSettings{
+		ActiveProvider: "cloudinary",
+		Local:          LocalStorageSettings{UploadDir: t.TempDir(), URLPrefix: "/uploads"},
+		Cloudinary: CloudinaryStorageSettings{
+			CloudName:           "demo-cloud",
+			APIKey:              "cloud-key-1",
+			APISecret:           "cloud-secret-xyz",
+			RootFolder:          "go-cms",
+			DeliveryType:        "upload",
+			DefaultResourceType: "auto",
+			UseSecureURL:        true,
+			OptimizationEnabled: true,
+			DefaultFormat:       "auto",
+			DefaultQuality:      "auto",
+			APIBaseURL:          srv.URL,
+		},
+	}, AuditMeta{ActorID: "admin-1"})
+	require.NoError(t, err)
+	assert.Equal(t, "cloudinary", saved.ActiveProvider)
+	assert.True(t, saved.Cloudinary.SecretConfigured)
+	assert.Equal(t, SecretPreserveSentinel, saved.Cloudinary.APISecret)
+	assert.Empty(t, saved.Cloudinary.APISecretEnc)
+	assert.Equal(t, "cloud-secret-xyz", gotSecrets.CloudinaryAPISecret)
+
+	// Audit metadata must never expose plaintext secret
+	logs, _, err := auditSvc.List(ctx, audit.Filter{Resource: "settings:storage"})
+	require.NoError(t, err)
+	require.NotEmpty(t, logs)
+	metaJSON, _ := json.Marshal(logs[0].Metadata)
+	assert.NotContains(t, string(metaJSON), "cloud-secret-xyz")
+
+	// Updating root folder with sentinel preserves encrypted secret
+	updated, err := svc.UpdateStorageSettings(ctx, StorageSettings{
+		ActiveProvider: "cloudinary",
+		Local:          saved.Local,
+		Cloudinary: CloudinaryStorageSettings{
+			CloudName:           "demo-cloud",
+			APIKey:              "cloud-key-1",
+			APISecret:           SecretPreserveSentinel,
+			RootFolder:          "cms-prod",
+			DeliveryType:        "upload",
+			DefaultResourceType: "auto",
+			UseSecureURL:        true,
+			APIBaseURL:          srv.URL,
+		},
+	}, AuditMeta{ActorID: "admin-1"})
+	require.NoError(t, err)
+	assert.Equal(t, "cms-prod", updated.Cloudinary.RootFolder)
+	assert.Equal(t, SecretPreserveSentinel, updated.Cloudinary.APISecret)
+
+	// TestStorageConnection pings mock Cloudinary endpoint cleanly
+	res, err := svc.TestStorageConnection(ctx, nil)
+	require.NoError(t, err)
+	assert.True(t, res.OK)
+	assert.Equal(t, "cloudinary", res.Provider)
+
+	// Test override with invalid secret returns OK=false gracefully
+	override := *updated
+	override.Cloudinary.APISecret = "wrong-secret"
+	badRes, err := svc.TestStorageConnection(ctx, &override)
+	require.NoError(t, err)
+	assert.False(t, badRes.OK)
+
+	// Verify BuildConfiguredProviders creates both local & cloudinary so switching preserves old assets
+	cfgOut, secOut, err := svc.ResolveStorageWithSecrets(ctx)
+	require.NoError(t, err)
+	providers := BuildConfiguredProviders(cfgOut, secOut)
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
+	}
+	assert.Contains(t, names, "local")
+	assert.Contains(t, names, "cloudinary")
+
+	// Verify env fallback populates Cloudinary config without mutating persisted DB storage
+	t.Setenv("CLOUDINARY_URL", "cloudinary://envkey:envsec@envcloud")
+	envSvc := NewService(NewMemoryRepository(), cfg, nil, RuntimeStatusProvider{})
+	envSt, envSec, err := envSvc.ResolveStorageWithSecrets(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "envcloud", envSt.Cloudinary.CloudName)
+	assert.Equal(t, "envkey", envSt.Cloudinary.APIKey)
+	assert.True(t, envSt.Cloudinary.SecretConfigured)
+	assert.Equal(t, SecretPreserveSentinel, envSt.Cloudinary.APISecret)
+	assert.Equal(t, "envsec", envSec.CloudinaryAPISecret)
 }
 
 func TestSettingsService_SecurityPasswordPolicyAndSSO(t *testing.T) {

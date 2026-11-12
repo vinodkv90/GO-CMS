@@ -33,6 +33,7 @@ import type {
   CORSSettings,
   RateLimitSettings,
   MediaSettings,
+  StorageCapabilities,
   StorageSettings,
   StorageTestResult,
   EmailSettings,
@@ -239,6 +240,39 @@ export const mediaApi = {
     api.post<{ data: MediaAsset }>(`/media/${id}/move`, { target_folder_id: targetFolderId || null }),
 
   delete: (id: string) => api.delete(`/media/${id}`),
+
+  capabilities: () => api.get<{ data: StorageCapabilities }>('/media/capabilities'),
+
+  replace: (id: string, file: File, altText = '', caption = '') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (altText) formData.append('alt_text', altText);
+    if (caption) formData.append('caption', caption);
+    return api.upload<{ data: MediaAsset }>(`/media/${id}/replace`, formData);
+  },
+
+  transformUrl: (
+    id: string,
+    params: {
+      w?: number;
+      h?: number;
+      crop?: string;
+      format?: string;
+      quality?: string;
+      gravity?: string;
+      dpr?: string;
+    },
+  ) => {
+    const q = new URLSearchParams();
+    if (params.w) q.set('w', String(params.w));
+    if (params.h) q.set('h', String(params.h));
+    if (params.crop) q.set('crop', params.crop);
+    if (params.format) q.set('format', params.format);
+    if (params.quality) q.set('quality', params.quality);
+    if (params.gravity) q.set('gravity', params.gravity);
+    if (params.dpr) q.set('dpr', params.dpr);
+    return api.get<{ url: string }>(`/media/${id}/transform?${q.toString()}`);
+  },
 
   getSignedURL: (id: string, ttl = 3600) =>
     api.get<{ signed_url: string; expires_in: number }>(`/media/${id}/signed-url?ttl=${ttl}`),

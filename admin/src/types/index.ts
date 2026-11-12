@@ -472,6 +472,32 @@ export interface S3StorageSettings {
   base_url: string;
 }
 
+export interface CloudinaryStorageSettings {
+  cloud_name: string;
+  api_key: string;
+  api_secret?: string;
+  secret_configured: boolean;
+  root_folder: string;
+  delivery_type: 'upload' | 'authenticated' | 'private';
+  default_resource_type: 'auto' | 'image' | 'video' | 'raw';
+  use_secure_url: boolean;
+  upload_preset?: string;
+  asset_naming_strategy?: 'cms_key' | 'original_filename' | 'random_id';
+  optimization_enabled: boolean;
+  default_format?: string;
+  default_quality?: string;
+  max_width?: number;
+  api_base_url?: string;
+}
+
+export interface StorageCapabilities {
+  provider: string;
+  supports_hls: boolean;
+  supports_signed_urls: boolean;
+  supports_transforms: boolean;
+  supports_folder_mapping: boolean;
+}
+
 export interface StorageTestResult {
   ok: boolean;
   provider: string;
@@ -480,9 +506,10 @@ export interface StorageTestResult {
 }
 
 export interface StorageSettings {
-  active_provider: 'local' | 's3' | 'minio';
+  active_provider: 'local' | 's3' | 'minio' | 'cloudinary';
   local: LocalStorageSettings;
   s3: S3StorageSettings;
+  cloudinary?: CloudinaryStorageSettings;
   supported_providers?: StorageProviderCapability[];
   updated_at?: string;
 }

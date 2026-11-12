@@ -308,15 +308,26 @@ func NewServer(
 			}, nil
 		})
 		if swappable, ok := mediaSvc.Storage().(*storage.SwappableProvider); ok {
-			if stCfg, decSecret, err := settingsSvc.ResolveStorageConfig(context.Background()); err == nil {
-				if p, err := settings.BuildStorageProvider(stCfg, decSecret); err == nil {
+			applyStorageRuntime := func(stCfg settings.StorageSettings, sec settings.StorageSecrets) {
+				for _, configured := range settings.BuildConfiguredProviders(stCfg, sec) {
+					swappable.RegisterProvider(configured)
+				}
+				if p, err := settings.BuildStorageProviderWithSecrets(stCfg, sec); err == nil {
 					swappable.Swap(p)
+					logger.Info("Active media storage provider configured", "provider", p.Name())
 				} else {
 					logger.Warn("Failed to apply persisted storage settings; keeping fallback provider", "error", err)
 				}
 			}
-			settingsSvc.OnStorageUpdated(func(st settings.StorageSettings, decSecret string) {
-				p, err := settings.BuildStorageProvider(st, decSecret)
+
+			if stCfg, secrets, err := settingsSvc.ResolveStorageWithSecrets(context.Background()); err == nil {
+				applyStorageRuntime(stCfg, secrets)
+			}
+			settingsSvc.OnStorageUpdatedWithSecrets(func(st settings.StorageSettings, secrets settings.StorageSecrets) {
+				for _, configured := range settings.BuildConfiguredProviders(st, secrets) {
+					swappable.RegisterProvider(configured)
+				}
+				p, err := settings.BuildStorageProviderWithSecrets(st, secrets)
 				if err != nil {
 					logger.Error("Failed to hot-swap storage provider", "provider", st.ActiveProvider, "error", err)
 					return

@@ -21,13 +21,14 @@ import {
   Edit2,
   Play,
   Package,
+  RefreshCw,
 } from 'lucide-react';
 import Hls from 'hls.js';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { mediaApi, mediaFoldersApi } from '../api/endpoints';
-import type { MediaAsset, MediaFolder, MediaFolderTreeNode } from '../types';
+import type { MediaAsset, MediaFolder, MediaFolderTreeNode, StorageCapabilities } from '../types';
 
 export interface MediaLibraryViewProps {
   mediaAssets: MediaAsset[];
@@ -85,8 +86,18 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
   const [generatedSignedURL, setGeneratedSignedURL] = useState<string | null>(null);
   const [isGeneratingSigned, setIsGeneratingSigned] = useState(false);
 
-  // Copied state
+  // Copied state & Replace state
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [replaceTarget, setReplaceTarget] = useState<MediaAsset | null>(null);
+  const [isReplacing, setIsReplacing] = useState(false);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const [storageCaps, setStorageCaps] = useState<StorageCapabilities>({
+    provider: 'local',
+    supports_hls: true,
+    supports_signed_urls: true,
+    supports_transforms: false,
+    supports_folder_mapping: true,
+  });
 
   // Load Folder Tree
   const loadFolderTree = async () => {
@@ -103,7 +114,44 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
 
   useEffect(() => {
     loadFolderTree();
+    mediaApi
+      .capabilities()
+      .then((res) => {
+        if (res.data) setStorageCaps(res.data);
+      })
+      .catch(() => {});
   }, []);
+
+  const getThumbnailSrc = (asset: MediaAsset) => {
+    const thumb = asset.metadata?.thumbnails?.small || asset.metadata?.thumbnails?.medium;
+    if (thumb && (thumb.startsWith('http://') || thumb.startsWith('https://'))) {
+      return thumb;
+    }
+    return asset.url;
+  };
+
+  const triggerReplaceAsset = (asset: MediaAsset) => {
+    setReplaceTarget(asset);
+    if (replaceInputRef.current) {
+      replaceInputRef.current.value = '';
+      replaceInputRef.current.click();
+    }
+  };
+
+  const handleReplaceFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !replaceTarget) return;
+    setIsReplacing(true);
+    try {
+      await mediaApi.replace(replaceTarget.id, file);
+      setReplaceTarget(null);
+      onRefresh();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to replace media file');
+    } finally {
+      setIsReplacing(false);
+    }
+  };
 
   // HLS Video Player Attachment
   useEffect(() => {
@@ -612,7 +660,7 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                       >
                         {isImage(asset.mime_type) ? (
                           <img
-                            src={asset.url}
+                            src={getThumbnailSrc(asset)}
                             alt={asset.metadata?.alt_text || asset.original_name}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                             onError={(e) => {
@@ -629,10 +677,22 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                               <Play className="w-8 h-8 text-white fill-white/80 drop-shadow" />
                             </div>
                           </div>
+                        ) : asset.mime_type.startsWith('video/') ? (
+                          <div className="flex flex-col items-center justify-center text-indigo-300 space-y-1">
+                            <Film className="w-10 h-10" />
+                            <span className="text-[10px] font-mono font-bold tracking-wider uppercase bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
+                              Video
+                            </span>
+                          </div>
                         ) : (
                           <FileText className="w-12 h-12 text-slate-400" />
                         )}
 
+                        {asset.storage_provider && (
+                          <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-900/85 text-indigo-100 backdrop-blur-xs uppercase">
+                            {asset.storage_provider}
+                          </span>
+                        )}
                         <span className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-900/80 text-white backdrop-blur-xs">
                           {formatFileSize(asset.file_size)}
                         </span>
@@ -676,6 +736,15 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                       </Button>
 
                       <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={isReplacing}
+                          onClick={() => triggerReplaceAsset(asset)}
+                          title="Replace Asset File"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 text-slate-600" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -733,7 +802,7 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                           >
                             <div className="w-9 h-9 rounded-lg bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center">
                               {isImage(asset.mime_type) ? (
-                                <img src={asset.url} alt="" className="w-full h-full object-cover" />
+                                <img src={getThumbnailSrc(asset)} alt="" className="w-full h-full object-cover" />
                               ) : isHlsAsset(asset) ? (
                                 <Film className="w-4 h-4 text-sky-600" />
                               ) : (
@@ -754,6 +823,15 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                           {asset.storage_key}
                         </td>
                         <td className="px-6 py-3.5 text-right space-x-1 whitespace-nowrap">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={isReplacing}
+                            onClick={() => triggerReplaceAsset(asset)}
+                            title="Replace Asset File"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-slate-600" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -826,17 +904,31 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
               Single Asset (Image, PDF, Doc)
             </button>
             <button
-              onClick={() => setUploadTab('hls')}
-              className={`px-4 py-2 text-xs font-semibold border-b-2 cursor-pointer transition-colors flex items-center gap-1.5 ${
-                uploadTab === 'hls'
-                  ? 'border-sky-600 text-sky-600'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              onClick={() => storageCaps.supports_hls && setUploadTab('hls')}
+              disabled={!storageCaps.supports_hls}
+              title={
+                storageCaps.supports_hls
+                  ? 'Upload HLS video package zip'
+                  : `HLS zip packages are not supported on ${storageCaps.provider}`
+              }
+              className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+                !storageCaps.supports_hls
+                  ? 'border-transparent text-slate-300 cursor-not-allowed'
+                  : uploadTab === 'hls'
+                    ? 'border-sky-600 text-sky-600 cursor-pointer'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 cursor-pointer'
               }`}
             >
               <Package className="w-3.5 h-3.5" />
               <span>HLS Video Package (.zip)</span>
             </button>
           </div>
+
+          {!storageCaps.supports_hls && (
+            <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+              Active storage provider (<code>{storageCaps.provider}</code>) does not support multi-file HLS zip extraction. Standard video uploads (MP4, WebM, MOV) remain supported.
+            </div>
+          )}
 
           {uploadError && (
             <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 flex items-center gap-2 text-xs text-rose-700">
@@ -1043,12 +1135,20 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
         </div>
       </Modal>
 
-      {/* Modal: Asset Preview (HLS Player / Image) */}
+      {/* Hidden input for replacing an existing asset file */}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleReplaceFileSelect}
+      />
+
+      {/* Modal: Asset Preview (HLS Player / Image / Video) */}
       <Modal
         isOpen={previewAsset !== null}
         onClose={() => setPreviewAsset(null)}
         title={previewAsset?.original_name || 'Asset Preview'}
-        description={`MIME: ${previewAsset?.mime_type} • Size: ${previewAsset ? formatFileSize(previewAsset.file_size) : ''}`}
+        description={`Provider: ${previewAsset?.storage_provider || 'local'} • MIME: ${previewAsset?.mime_type} • Size: ${previewAsset ? formatFileSize(previewAsset.file_size) : ''}`}
         maxWidth="xl"
       >
         {previewAsset && (
@@ -1070,6 +1170,14 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
                     <p>Master Playlist: {previewAsset.metadata.custom.master_playlist}</p>
                   </div>
                 )}
+              </div>
+            ) : previewAsset.mime_type.startsWith('video/') ? (
+              <div className="bg-black rounded-lg overflow-hidden aspect-video flex items-center justify-center">
+                <video
+                  src={previewAsset.url}
+                  controls
+                  className="w-full h-full object-contain"
+                />
               </div>
             ) : isImage(previewAsset.mime_type) ? (
               <div className="bg-slate-100 rounded-lg overflow-hidden max-h-[70vh] flex items-center justify-center p-2">
