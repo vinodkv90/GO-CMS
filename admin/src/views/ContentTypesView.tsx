@@ -573,9 +573,9 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
   );
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col lg:flex-row bg-slate-50">
+    <div className="flex flex-1 h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden bg-slate-50">
       {/* Left Strapi-Style Builder Sub-Sidebar */}
-      <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-72 lg:border-r lg:border-b-0">
+      <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-72 lg:min-h-0 lg:border-r lg:border-b-0">
         <div className="border-b border-slate-200 px-4 py-3.5 space-y-2.5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-900">Content-Type Builder</h2>
@@ -686,7 +686,7 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
       </aside>
 
       {/* Right Workspace Region */}
-      <section className="flex flex-1 min-w-0 flex-col">
+      <section className="flex flex-1 min-w-0 lg:min-h-0 flex-col lg:overflow-hidden">
         {!selectedType ? (
           <div className="flex flex-1 items-center justify-center p-8">
             <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-xs">
@@ -715,7 +715,7 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
         ) : (
           <>
             {/* Top Model Action Bar */}
-            <header className="border-b border-slate-200 bg-white px-6 py-4">
+            <header className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-2.5">
@@ -843,7 +843,7 @@ export const ContentTypesView: React.FC<ContentTypesViewProps> = ({
             </header>
 
             {/* Fields Listing Card */}
-            <div className="flex-1 p-6">
+            <div className="flex-1 lg:overflow-y-auto p-6">
               {stagedFields.length === 0 ? (
                 <div className="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-xs">
                   <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-sky-50 text-sky-600">

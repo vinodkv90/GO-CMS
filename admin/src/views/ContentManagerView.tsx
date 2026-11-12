@@ -808,9 +808,9 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
   };
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col lg:flex-row bg-slate-50">
+    <div className="flex flex-1 h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden bg-slate-50">
       {/* Left Strapi-Style Content Manager Sub-Sidebar */}
-      <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-64 lg:border-r lg:border-b-0">
+      <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-64 lg:min-h-0 lg:border-r lg:border-b-0">
         <div className="border-b border-slate-200 px-4 py-3.5 space-y-2.5">
           <h2 className="text-sm font-bold text-slate-900">Content Manager</h2>
           <div className="relative">
@@ -898,11 +898,11 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
       </aside>
 
       {/* Main Content Workspace */}
-      <section className="flex flex-1 min-w-0 flex-col">
+      <section className="flex flex-1 min-w-0 lg:min-h-0 flex-col lg:overflow-hidden">
         {viewMode === 'list' && contentType.kind === 'collection' ? (
           /* COLLECTION LISTING VIEW */
           <>
-            <header className="border-b border-slate-200 bg-white px-6 py-4">
+            <header className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <div className="flex flex-wrap items-center gap-2.5">
@@ -1110,7 +1110,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
               )}
             </header>
 
-            <div className="flex-1 p-6 space-y-4">
+            <div className="flex-1 lg:overflow-y-auto p-6 space-y-4">
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse text-left text-xs">
@@ -1316,7 +1316,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
           /* STRAPI 5 SPLIT-PANE ENTRY EDITOR (UNIFIED FOR COLLECTION & SINGLE TYPES) */
           <>
             {/* Top Sticky Entry Bar */}
-            <header className="sticky top-0 z-20 border-b border-slate-200 bg-white px-6 py-3.5">
+            <header className="shrink-0 sticky top-0 z-20 border-b border-slate-200 bg-white px-6 py-3.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <button
@@ -1477,7 +1477,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
             </header>
 
             {/* Split-Pane Body: Left 70% Canvas + Right Sticky Sidebar */}
-            <div className="flex-1 p-6">
+            <div className="flex-1 lg:overflow-y-auto p-6">
               <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[1fr_320px]">
                 {/* Left Main Form Canvas */}
                 <div className="min-w-0 space-y-4">
@@ -1683,7 +1683,7 @@ export const ContentManagerView: React.FC<ContentManagerViewProps> = ({
                 </div>
 
                 {/* Right Sticky Status, Publish & Metadata Sidebar */}
-                <aside className="space-y-4 xl:sticky xl:top-20">
+                <aside className="space-y-4 xl:sticky xl:top-0">
                   {/* Publishing Actions Card */}
                   <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
                     <div className="flex items-center justify-between">
