@@ -97,6 +97,110 @@ func main() {
 
 		contentRepo := content.NewSQLContentRepository(sqlDB)
 		contentSvc = content.NewService(contentRepo, contentRepo, contentRepo, fieldReg, content.NewEventBus(), logger)
+
+		// Seed default "pages" content type for Visual Page Builder if not exists
+		if _, err := contentSvc.GetContentType(context.Background(), "pages"); err != nil {
+			_, _ = contentSvc.CreateContentType(context.Background(), content.CreateTypeRequest{
+				Name: "Pages",
+				UID:  "pages",
+				Kind: content.KindCollection,
+				Fields: []content.ContentField{
+					{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText, Configuration: fields.ValidationRules{Required: true}},
+					{Name: "Slug", FieldKey: "slug", FieldType: fields.TypeShortText},
+					{Name: "Template", FieldKey: "template", FieldType: fields.TypeShortText},
+					{Name: "Blocks", FieldKey: "blocks", FieldType: fields.TypeJSON},
+					{Name: "SEO", FieldKey: "seo", FieldType: fields.TypeJSON},
+				},
+			})
+			logger.Info("Default 'pages' content type bootstrapped for Visual Page Builder")
+		}
+
+		// Seed default "home" page entry if not exists
+		if _, err := contentSvc.GetEntryBySlug(context.Background(), "pages", "home", true); err != nil {
+			homeBlocks := []map[string]any{
+				{
+					"id":   "home-sec-1",
+					"type": "core/section",
+					"attributes": map[string]any{
+						"padding":         "large",
+						"backgroundColor": "#0f172a",
+						"textColor":       "#ffffff",
+					},
+					"innerBlocks": []map[string]any{
+						{
+							"id":   "home-cnt-1",
+							"type": "core/container",
+							"attributes": map[string]any{
+								"maxWidth": "boxed",
+							},
+							"innerBlocks": []map[string]any{
+								{
+									"id":   "home-h-1",
+									"type": "core/heading",
+									"attributes": map[string]any{
+										"level":     1,
+										"content":   "Build High-Performance Websites with Go CMS",
+										"textAlign": "center",
+										"textColor": "#38bdf8",
+									},
+								},
+								{
+									"id":   "home-p-1",
+									"type": "core/paragraph",
+									"attributes": map[string]any{
+										"content":   "Experience lightning-fast server-side rendering paired with the flexibility of visual Gutenberg block editing.",
+										"textAlign": "center",
+									},
+								},
+								{
+									"id":   "home-btn-1",
+									"type": "core/button",
+									"attributes": map[string]any{
+										"text":      "Explore Articles",
+										"url":       "/blog-post",
+										"variant":   "primary",
+										"alignment": "center",
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					"id":   "home-sec-2",
+					"type": "core/section",
+					"attributes": map[string]any{
+						"padding":         "medium",
+						"backgroundColor": "#f8fafc",
+					},
+					"innerBlocks": []map[string]any{
+						{
+							"id":   "home-dyn-1",
+							"type": "core/dynamic-posts",
+							"attributes": map[string]any{
+								"collection": "blog-post",
+								"limit":      6,
+								"title":      "Latest Articles & Insights",
+							},
+						},
+					},
+				},
+			}
+			createdHome, err := contentSvc.CreateEntry(context.Background(), "pages", map[string]any{
+				"title":    "Home Page",
+				"slug":     "home",
+				"template": "default",
+				"blocks":   homeBlocks,
+				"seo": map[string]any{
+					"meta_title":       "Home | Go CMS",
+					"meta_description": "Welcome to our high-performance website built with Go CMS.",
+				},
+			}, "system")
+			if err == nil {
+				_, _ = contentSvc.PublishEntry(context.Background(), "pages", createdHome.ID, "system")
+				logger.Info("Default 'home' page bootstrapped and published for Page Builder")
+			}
+		}
 	}
 
 	// Initialize Storage Provider and Media Service

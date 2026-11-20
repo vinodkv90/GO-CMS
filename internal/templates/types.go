@@ -1,6 +1,9 @@
 package templates
 
-import "time"
+import (
+	"html/template"
+	"time"
+)
 
 // SiteInfo holds global metadata about the website.
 type SiteInfo struct {
@@ -43,15 +46,16 @@ type Pagination struct {
 
 // TemplateData is the strongly typed context injected into Go html/template execution.
 type TemplateData struct {
-	Site        SiteInfo
-	SEO         SEOMetadata
-	Breadcrumbs []BreadcrumbItem
-	Pagination  *Pagination
-	Page        map[string]any
-	Posts       []map[string]any
-	Entry       map[string]any
-	Params      map[string]string
-	CSRFToken   string
-	Preview     bool
-	GeneratedAt time.Time
+	Site           SiteInfo
+	SEO            SEOMetadata
+	Breadcrumbs    []BreadcrumbItem
+	Pagination     *Pagination
+	Page           map[string]any
+	Posts          []map[string]any
+	Entry          map[string]any
+	Params         map[string]string
+	CSRFToken      string
+	Preview        bool
+	RenderedBlocks template.HTML
+	GeneratedAt    time.Time
 }

@@ -1,0 +1,38 @@
+{{define "content"}}
+<div class="cms-page-wrapper {{ if .Page.template }}cms-template-{{ .Page.template }}{{ end }}">
+  {{ if .Breadcrumbs }}
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <ol class="breadcrumb-list">
+      {{ range $index, $item := .Breadcrumbs }}
+      <li class="breadcrumb-item">
+        {{ if eq $index (sub (len $.Breadcrumbs) 1) }}
+        <span aria-current="page">{{ $item.Title }}</span>
+        {{ else }}
+        <a href="{{ $item.URL }}">{{ $item.Title }}</a> &rsaquo;
+        {{ end }}
+      </li>
+      {{ end }}
+    </ol>
+  </nav>
+  {{ end }}
+
+  {{ if .RenderedBlocks }}
+    <div class="cms-blocks-content">
+      {{ .RenderedBlocks }}
+    </div>
+  {{ else if .Page.content }}
+    <div class="article-body">
+      {{ sanitizeHTML .Page.content }}
+    </div>
+  {{ else if .Page.body }}
+    <div class="article-body">
+      {{ sanitizeHTML .Page.body }}
+    </div>
+  {{ else }}
+    <div class="empty-page py-12 text-center text-slate-400">
+      <p>No content has been published on this page yet.</p>
+    </div>
+  {{ end }}
+</div>
+{{end}}
+

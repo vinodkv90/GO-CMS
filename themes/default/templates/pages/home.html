@@ -1,5 +1,10 @@
 {{define "content"}}
 <div class="home-page">
+  {{ if .RenderedBlocks }}
+    <div class="cms-blocks-content">
+      {{ .RenderedBlocks }}
+    </div>
+  {{ else }}
   <section class="hero">
     <div class="hero-content">
       <h1 class="hero-title">{{ defaultVal .Page.title .Site.Title }}</h1>
@@ -34,6 +39,7 @@
       <p>Log into the admin portal to define content types and publish your first articles.</p>
     </div>
   </section>
+  {{ end }}
   {{ end }}
 </div>
 {{end}}

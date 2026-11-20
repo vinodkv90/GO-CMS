@@ -337,3 +337,243 @@ body {
   text-decoration: underline;
 }
 
+
+
+/* ==========================================================================
+   Go CMS Visual Page Builder — Block Styles
+   ========================================================================== */
+
+.cms-block-section {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cms-section-inner {
+  width: 100%;
+}
+
+.cms-block-container {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.max-w-4xl { max-width: 56rem; }
+.max-w-5xl { max-width: 64rem; }
+.max-w-6xl { max-width: 72rem; }
+.max-w-full { max-width: 100%; }
+
+.mx-auto { margin-left: auto; margin-right: auto; }
+.my-4 { margin-top: 1rem; margin-bottom: 1rem; }
+.my-6 { margin-top: 1.5rem; margin-bottom: 1.5rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-4 { margin-bottom: 1rem; }
+.mt-2 { margin-top: 0.5rem; }
+
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+.py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+.py-12 { padding-top: 3rem; padding-bottom: 3rem; }
+.py-16 { padding-top: 4rem; padding-bottom: 4rem; }
+.py-20 { padding-top: 5rem; padding-bottom: 5rem; }
+
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-justify { text-align: justify; }
+
+.cms-block-heading {
+  font-weight: 700;
+  line-height: 1.25;
+  margin-bottom: 1rem;
+  color: inherit;
+}
+
+.cms-h1 { font-size: 2.25rem; }
+.cms-h2 { font-size: 1.875rem; }
+.cms-h3 { font-size: 1.5rem; }
+.cms-h4 { font-size: 1.25rem; }
+.cms-h5 { font-size: 1.125rem; }
+.cms-h6 { font-size: 1rem; }
+
+.cms-block-paragraph {
+  font-size: 1.05rem;
+  line-height: 1.7;
+  margin-bottom: 1.25rem;
+  color: inherit;
+}
+
+.cms-block-image {
+  margin: 1.5rem 0;
+}
+
+.cms-img-responsive {
+  max-width: 100%;
+  height: auto;
+  display: inline-block;
+  border-radius: 0.5rem;
+}
+
+.cms-img-caption {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* Columns Grid */
+.cms-block-columns {
+  display: grid;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 1.5rem 0;
+}
+
+.cms-grid-cols-1 { grid-template-columns: 1fr; }
+.cms-grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cms-grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cms-grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.gap-4 { gap: 1rem; }
+.gap-6 { gap: 1.5rem; }
+.gap-8 { gap: 2rem; }
+
+@media (max-width: 768px) {
+  .cms-grid-cols-2, .cms-grid-cols-3, .cms-grid-cols-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cms-block-column {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Button */
+.cms-block-button-wrapper {
+  margin: 1rem 0;
+}
+
+.cms-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  border: 1px solid transparent;
+}
+
+.cms-btn-primary {
+  background-color: var(--primary);
+  color: #ffffff !important;
+}
+
+.cms-btn-primary:hover {
+  background-color: var(--primary-hover);
+  text-decoration: none !important;
+}
+
+.cms-btn-secondary {
+  background-color: #334155;
+  color: #ffffff !important;
+}
+
+.cms-btn-secondary:hover {
+  background-color: #1e293b;
+  text-decoration: none !important;
+}
+
+.cms-btn-outline {
+  background-color: transparent;
+  border-color: var(--primary);
+  color: var(--primary) !important;
+}
+
+.cms-btn-outline:hover {
+  background-color: var(--primary);
+  color: #ffffff !important;
+  text-decoration: none !important;
+}
+
+.cms-btn-ghost {
+  background-color: transparent;
+  color: var(--text-main) !important;
+}
+
+.cms-btn-ghost:hover {
+  background-color: #e2e8f0;
+  text-decoration: none !important;
+}
+
+/* Separator & Spacer */
+.cms-block-separator {
+  border: 0;
+  margin: 2rem 0;
+}
+
+.cms-separator-solid { border-top: 1px solid var(--border-color); }
+.cms-separator-dashed { border-top: 1px dashed var(--border-color); }
+.cms-separator-dots { border-top: 2px dotted var(--border-color); }
+
+.cms-block-spacer {
+  width: 100%;
+}
+
+/* Quote */
+.cms-block-quote {
+  border-left: 4px solid var(--primary);
+  padding: 0.75rem 0 0.75rem 1.5rem;
+  margin: 1.5rem 0;
+  font-style: italic;
+  color: var(--text-main);
+  background: #f1f5f9;
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.cms-block-quote p {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.cms-block-quote cite {
+  display: block;
+  font-size: 0.875rem;
+  font-style: normal;
+  color: var(--text-muted);
+  margin-top: 0.5rem;
+  font-weight: 500;
+}
+
+/* Dynamic CMS Posts */
+.cms-posts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.cms-post-card {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+.cms-post-card h3 {
+  font-size: 1.15rem;
+  margin-bottom: 0.5rem;
+}
+
+.cms-post-card h3 a {
+  color: var(--text-main);
+  text-decoration: none;
+}
+
+.cms-post-card h3 a:hover {
+  color: var(--primary);
+}

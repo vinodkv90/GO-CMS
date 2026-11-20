@@ -4,6 +4,7 @@ import {
   Layers,
   FileText,
   Image,
+  Globe,
   Puzzle,
   Palette,
   Users,
@@ -119,6 +120,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Studio & Builders */}
         <div className="space-y-1">
           <p className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Studio</p>
+          <button
+            onClick={() => onSelectTab('pages')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition-colors cursor-pointer ${
+              currentTab === 'pages' || currentTab.startsWith('page-builder')
+                ? 'bg-sky-600 text-white shadow-xs'
+                : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
+            }`}
+          >
+            <Globe className="w-4 h-4 text-sky-400" />
+            <div className="flex items-center justify-between flex-1">
+              <span>Pages</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 font-mono">
+                Visual
+              </span>
+            </div>
+          </button>
           <button
             onClick={() => onSelectTab('content-types')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition-colors cursor-pointer ${

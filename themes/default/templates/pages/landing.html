@@ -1,0 +1,18 @@
+{{define "content"}}
+<div class="cms-page-landing">
+  {{ if .RenderedBlocks }}
+    <div class="cms-landing-blocks">
+      {{ .RenderedBlocks }}
+    </div>
+  {{ else if .Page.content }}
+    <div class="article-body">
+      {{ sanitizeHTML .Page.content }}
+    </div>
+  {{ else }}
+    <div class="empty-page py-12 text-center text-slate-400">
+      <p>Landing page content not yet published.</p>
+    </div>
+  {{ end }}
+</div>
+{{end}}
+

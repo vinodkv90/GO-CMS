@@ -13,6 +13,8 @@ import { ThemesView } from './views/ThemesView';
 import { UsersView } from './views/UsersView';
 import { SettingsView } from './views/SettingsView';
 import { AcceptInviteView } from './views/AcceptInviteView';
+import { PagesView } from './views/PagesView';
+import { PageBuilderView } from './views/PageBuilderView';
 import { getCookie, getStoredToken, setStoredToken } from './api/client';
 import {
   authApi,
@@ -61,6 +63,8 @@ export function AppContent() {
   const [themes, setThemes] = useState<ThemeManifest[]>([]);
   const [publicSettings, setPublicSettings] = useState<PublicGeneralSettings | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+  const [builderPageId, setBuilderPageId] = useState<string | undefined>();
+  const [builderInitialSlug, setBuilderInitialSlug] = useState<string | undefined>();
 
   useEffect(() => {
     settingsApi
@@ -181,6 +185,7 @@ export function AppContent() {
   // Determine topbar page title
   const getPageTitle = () => {
     if (currentTab === 'dashboard') return 'Dashboard';
+    if (currentTab === 'pages') return 'Pages & Site Builder';
     if (currentTab === 'content-types') return 'Content Type Builder';
     if (currentTab === 'media') return 'Media Library';
     if (currentTab === 'plugins') return 'Plugins';
@@ -248,6 +253,16 @@ export function AppContent() {
     );
   }
 
+  if (currentTab === 'page-builder') {
+    return (
+      <PageBuilderView
+        pageId={builderPageId}
+        initialSlug={builderInitialSlug}
+        onBack={() => setCurrentTab('pages')}
+      />
+    );
+  }
+
   // Active view router
   let mainContent: React.ReactNode = null;
 
@@ -259,6 +274,17 @@ export function AppContent() {
         plugins={plugins}
         themes={themes}
         onSelectTab={handleSelectTab}
+      />
+    );
+  } else if (currentTab === 'pages') {
+    mainContent = (
+      <PagesView
+        onOpenBuilder={(pageId, slug) => {
+          setBuilderPageId(pageId);
+          setBuilderInitialSlug(slug);
+          setCurrentTab('page-builder');
+        }}
+        onNavigateToContent={(uid) => setCurrentTab(`content:${uid}`)}
       />
     );
   } else if (currentTab === 'content-types') {

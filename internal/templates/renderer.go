@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"html/template"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
+	"github.com/go-cms/cms/internal/templates/blocks"
 	"github.com/go-cms/cms/internal/themes"
 )
 
@@ -224,9 +226,28 @@ func (r *Renderer) handleHome(w http.ResponseWriter, req *http.Request) {
 		Page:        make(map[string]any),
 	}
 
-	// Check if a single content type "homepage" exists
+	// Check if a dedicated "home" page exists in "pages" collection or a single "homepage" exists
 	if r.contentSvc != nil {
-		if singleHome, err := r.contentSvc.GetSingleEntry(ctx, "homepage", previewDraft); err == nil {
+		if homePage, err := r.contentSvc.GetEntryBySlug(ctx, "pages", "home", previewDraft); err == nil {
+			d := homePage.PublishedData
+			if previewDraft || d == nil {
+				d = homePage.DraftData
+			}
+			if d != nil {
+				templateData.Page = d
+				if title, ok := d["title"].(string); ok && title != "" {
+					templateData.SEO.Title = title
+				}
+				if seoRaw, ok := d["seo"].(map[string]any); ok {
+					if metaDesc, ok := seoRaw["meta_description"].(string); ok && metaDesc != "" {
+						templateData.SEO.Description = metaDesc
+					}
+					if metaTitle, ok := seoRaw["meta_title"].(string); ok && metaTitle != "" {
+						templateData.SEO.Title = metaTitle
+					}
+				}
+			}
+		} else if singleHome, err := r.contentSvc.GetSingleEntry(ctx, "homepage", previewDraft); err == nil {
 			if previewDraft {
 				templateData.Page = singleHome.DraftData
 			} else {
@@ -234,10 +255,10 @@ func (r *Renderer) handleHome(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 
-		// Load recent published posts/articles if available
+		// Load recent published posts/articles if available (excluding "pages")
 		contentTypes, _ := r.contentSvc.ListContentTypes(ctx)
 		for _, ct := range contentTypes {
-			if ct.Kind == content.KindCollection {
+			if ct.Kind == content.KindCollection && ct.UID != "pages" {
 				entries, _, err := r.contentSvc.ListEntries(ctx, ct.UID, content.EntryFilter{Limit: 10}, previewDraft)
 				if err == nil {
 					for _, e := range entries {
@@ -254,6 +275,14 @@ func (r *Renderer) handleHome(w http.ResponseWriter, req *http.Request) {
 				break
 			}
 		}
+		// Render blocks if present on home page
+		if rawBlocks, ok := templateData.Page["blocks"]; ok && rawBlocks != nil {
+			if parsed, err := blocks.ParseBlocks(rawBlocks); err == nil && len(parsed) > 0 {
+				prov := &templateContentProvider{contentSvc: r.contentSvc}
+				rCtx := blocks.NewRenderContext(ctx, prov, previewDraft)
+				templateData.RenderedBlocks = blocks.RenderBlocks(parsed, rCtx)
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -261,6 +290,39 @@ func (r *Renderer) handleHome(w http.ResponseWriter, req *http.Request) {
 		r.logger.Error("Error rendering home template", "error", err)
 		r.renderError(w, http.StatusInternalServerError, "Internal Server Error")
 	}
+}
+
+type templateContentProvider struct {
+	contentSvc *content.Service
+}
+
+func (p *templateContentProvider) ListPublished(ctx context.Context, collectionUID string, limit int, preview bool) ([]map[string]any, error) {
+	if p.contentSvc == nil {
+		return nil, nil
+	}
+	entries, _, err := p.contentSvc.ListEntries(ctx, collectionUID, content.EntryFilter{Limit: limit}, preview)
+	if err != nil {
+		return nil, err
+	}
+	var res []map[string]any
+	for _, e := range entries {
+		d := e.PublishedData
+		if preview || d == nil {
+			d = e.DraftData
+		}
+		if d == nil {
+			continue
+		}
+		clone := make(map[string]any, len(d)+3)
+		for k, v := range d {
+			clone[k] = v
+		}
+		clone["_id"] = e.ID
+		clone["_slug"] = e.Slug
+		clone["_type"] = collectionUID
+		res = append(res, clone)
+	}
+	return res, nil
 }
 
 func (r *Renderer) handleSingleOrArchive(w http.ResponseWriter, req *http.Request) {
@@ -279,7 +341,13 @@ func (r *Renderer) handleSingleOrArchive(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	// Case 1: Check if slug matches a Content Type
+	// Case 1: Check if slug matches a dedicated Page entry in "pages" collection
+	if pageEntry, err := r.contentSvc.GetEntryBySlug(ctx, "pages", slug, previewDraft); err == nil {
+		r.renderPageEntry(w, req, pageEntry, previewDraft)
+		return
+	}
+
+	// Case 2: Check if slug matches a Content Type
 	ct, err := r.contentSvc.GetContentType(ctx, slug)
 	if err == nil {
 		if ct.Kind == content.KindCollection {
@@ -416,6 +484,92 @@ func (r *Renderer) handleCollectionItem(w http.ResponseWriter, req *http.Request
 	r.renderEntryPage(w, req, ct, entry, previewDraft)
 }
 
+func (r *Renderer) renderPageEntry(w http.ResponseWriter, req *http.Request, entry *content.ContentEntry, previewDraft bool) {
+	itemData := entry.PublishedData
+	if previewDraft || itemData == nil {
+		itemData = entry.DraftData
+	}
+	if itemData == nil {
+		itemData = make(map[string]any)
+	}
+	itemData["_id"] = entry.ID
+	itemData["_slug"] = entry.Slug
+	itemData["_type"] = "pages"
+
+	title, _ := itemData["title"].(string)
+	if title == "" {
+		title = "Page"
+	}
+
+	siteInfo := r.buildSiteInfo()
+	canonicalURL := fmt.Sprintf("%s/%s", siteInfo.BaseURL, entry.Slug)
+
+	seoMeta := SEOMetadata{
+		Title:     title,
+		Canonical: canonicalURL,
+	}
+	if seoMap, ok := itemData["seo"].(map[string]any); ok {
+		if metaTitle, _ := seoMap["meta_title"].(string); metaTitle != "" {
+			seoMeta.Title = metaTitle
+		}
+		if metaDesc, _ := seoMap["meta_description"].(string); metaDesc != "" {
+			seoMeta.Description = metaDesc
+		}
+		if canonical, _ := seoMap["canonical"].(string); canonical != "" {
+			seoMeta.Canonical = canonical
+		}
+		if ogImg, _ := seoMap["og_image"].(string); ogImg != "" {
+			seoMeta.OGImage = ogImg
+		}
+	} else if desc, _ := itemData["description"].(string); desc != "" {
+		seoMeta.Description = desc
+	}
+
+	// Render blocks if present
+	var renderedBlocks template.HTML
+	if rawBlocks, ok := itemData["blocks"]; ok && rawBlocks != nil {
+		if parsedBlocks, err := blocks.ParseBlocks(rawBlocks); err == nil && len(parsedBlocks) > 0 {
+			prov := &templateContentProvider{contentSvc: r.contentSvc}
+			rCtx := blocks.NewRenderContext(req.Context(), prov, previewDraft)
+			renderedBlocks = blocks.RenderBlocks(parsedBlocks, rCtx)
+		}
+	}
+
+	data := &TemplateData{
+		Site: siteInfo,
+		SEO:  seoMeta,
+		Breadcrumbs: []BreadcrumbItem{
+			{Title: "Home", URL: "/"},
+			{Title: title, URL: canonicalURL},
+		},
+		Entry:          itemData,
+		Page:           itemData,
+		Preview:        previewDraft,
+		RenderedBlocks: renderedBlocks,
+	}
+
+	// Determine template file: check if template is specified (e.g. "landing", "full-width")
+	templateFile := filepath.Join("pages", "page.html")
+	if customTmpl, ok := itemData["template"].(string); ok && customTmpl != "" && customTmpl != "default" {
+		candidate := filepath.Join("pages", fmt.Sprintf("%s.html", customTmpl))
+		theme, err := r.themeMgr.GetActive()
+		if err == nil {
+			if _, statErr := os.Stat(filepath.Join(theme.RootDir, "templates", candidate)); statErr == nil {
+				templateFile = candidate
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := r.Render(w, templateFile, data); err != nil {
+		// Fallback to article.html if page.html is not found in theme
+		if fallbackErr := r.Render(w, filepath.Join("pages", "article.html"), data); fallbackErr != nil {
+			r.logger.Error("Failed to render page template", "slug", entry.Slug, "error", err)
+			r.renderError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
 func (r *Renderer) renderEntryPage(w http.ResponseWriter, req *http.Request, ct *content.ContentType, entry *content.ContentEntry, previewDraft bool) {
 	itemData := entry.PublishedData
 	if previewDraft || itemData == nil {
@@ -435,6 +589,16 @@ func (r *Renderer) renderEntryPage(w http.ResponseWriter, req *http.Request, ct 
 	siteInfo := r.buildSiteInfo()
 	canonicalURL := fmt.Sprintf("%s/%s/%s", siteInfo.BaseURL, ct.UID, entry.Slug)
 
+	// Render blocks if present on entry
+	var renderedBlocks template.HTML
+	if rawBlocks, ok := itemData["blocks"]; ok && rawBlocks != nil {
+		if parsedBlocks, err := blocks.ParseBlocks(rawBlocks); err == nil && len(parsedBlocks) > 0 {
+			prov := &templateContentProvider{contentSvc: r.contentSvc}
+			rCtx := blocks.NewRenderContext(req.Context(), prov, previewDraft)
+			renderedBlocks = blocks.RenderBlocks(parsedBlocks, rCtx)
+		}
+	}
+
 	data := &TemplateData{
 		Site: siteInfo,
 		SEO: SEOMetadata{
@@ -447,9 +611,10 @@ func (r *Renderer) renderEntryPage(w http.ResponseWriter, req *http.Request, ct 
 			{Title: ct.Name, URL: "/" + ct.UID},
 			{Title: title, URL: canonicalURL},
 		},
-		Entry:   itemData,
-		Page:    itemData,
-		Preview: previewDraft,
+		Entry:          itemData,
+		Page:           itemData,
+		Preview:        previewDraft,
+		RenderedBlocks: renderedBlocks,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

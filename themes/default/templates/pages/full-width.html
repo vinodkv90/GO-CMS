@@ -1,0 +1,18 @@
+{{define "content"}}
+<div class="cms-page-full-width">
+  {{ if .RenderedBlocks }}
+    <div class="cms-blocks-content w-full">
+      {{ .RenderedBlocks }}
+    </div>
+  {{ else if .Page.content }}
+    <div class="article-body w-full">
+      {{ sanitizeHTML .Page.content }}
+    </div>
+  {{ else }}
+    <div class="empty-page py-12 text-center text-slate-400">
+      <p>No content available.</p>
+    </div>
+  {{ end }}
+</div>
+{{end}}
+

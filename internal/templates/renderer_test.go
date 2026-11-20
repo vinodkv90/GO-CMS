@@ -296,7 +296,88 @@ func TestRenderer_WebRoutesAndContentIntegration(t *testing.T) {
 	assert.NotEmpty(t, feed.Channel.Items)
 	assert.Equal(t, "Hello from Go Template Engine", feed.Channel.Items[0].Title)
 
-	// Test 7: 404 Not Found Page
+	// Test 7: Page Builder Routable Page GET /about-us
+	pagesType, err := contentSvc.CreateContentType(ctx, content.CreateTypeRequest{
+		Name: "Pages",
+		UID:  "pages",
+		Kind: content.KindCollection,
+		Fields: []content.ContentField{
+			{Name: "Title", FieldKey: "title", FieldType: fields.TypeShortText},
+			{Name: "Template", FieldKey: "template", FieldType: fields.TypeShortText},
+			{Name: "Blocks", FieldKey: "blocks", FieldType: fields.TypeJSON},
+			{Name: "SEO", FieldKey: "seo", FieldType: fields.TypeJSON},
+		},
+	})
+	require.NoError(t, err)
+
+	pageEntry, err := contentSvc.CreateEntry(ctx, pagesType.UID, map[string]any{
+		"title":    "About Us",
+		"template": "default",
+		"blocks": []map[string]any{
+			{
+				"id":   "sec-1",
+				"type": "core/section",
+				"attributes": map[string]any{
+					"padding":         "py-16",
+					"backgroundColor": "#f8fafc",
+				},
+				"children": []map[string]any{
+					{
+						"id":   "h-1",
+						"type": "core/heading",
+						"attributes": map[string]any{
+							"level":   1,
+							"content": "About Go CMS Team",
+							"align":   "center",
+						},
+					},
+					{
+						"id":   "p-1",
+						"type": "core/paragraph",
+						"attributes": map[string]any{
+							"content": "Crafted with native Go performance.",
+							"align":   "center",
+						},
+					},
+					{
+						"id":   "btn-1",
+						"type": "core/button",
+						"attributes": map[string]any{
+							"text":    "Contact Us",
+							"url":     "/contact",
+							"variant": "primary",
+						},
+					},
+				},
+			},
+		},
+	}, "user-1")
+	require.NoError(t, err)
+
+	// Before publishing: /about-us should be 404 (draft only)
+	req = httptest.NewRequest("GET", "/about-us", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// Publish page
+	publishedPage, err := contentSvc.PublishEntry(ctx, pagesType.UID, pageEntry.ID, "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, content.StatusPublished, publishedPage.Status)
+
+	// Now /about-us should render 200 with server-rendered blocks
+	req = httptest.NewRequest("GET", "/about-us", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	body = w.Body.String()
+	assert.Contains(t, body, "About Go CMS Team")
+	assert.Contains(t, body, "Crafted with native Go performance.")
+	assert.Contains(t, body, "cms-block-section")
+	assert.Contains(t, body, "Contact Us")
+	assert.Contains(t, body, "/contact")
+
+	// Test 8: 404 Not Found Page
 	req = httptest.NewRequest("GET", "/non-existent-page", nil)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
