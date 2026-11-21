@@ -4,8 +4,8 @@ const https = require('https');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 
-const REPO_OWNER = 'go-cms';
-const REPO_NAME = 'cms';
+const REPO_OWNER = process.env.GO_CMS_REPO_OWNER || 'vinodkv90';
+const REPO_NAME = process.env.GO_CMS_REPO_NAME || 'GO-CMS';
 const DEFAULT_VERSION = '0.1.0';
 
 /**
