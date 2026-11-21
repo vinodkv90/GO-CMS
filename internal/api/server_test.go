@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-cms/cms/admin"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/config"
 	"github.com/go-cms/cms/internal/content"
@@ -178,7 +179,7 @@ func TestApiV1Ping(t *testing.T) {
 }
 
 func TestAdminSPARoutes(t *testing.T) {
-	if findAdminDist() == "" {
+	if findAdminDist() == "" && !admin.HasEmbeddedAdmin() {
 		t.Skip("skipping admin SPA test: admin/dist is not built")
 	}
 

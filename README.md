@@ -153,42 +153,53 @@ Go CMS Repository Layout
 
 ---
 
-## Quick Start
+## Quick Start (Next.js & Strapi Style Installation)
 
-### Option A: Complete Docker Compose Stack (Recommended)
+### Option A: Install via `npx` (Recommended)
 
-Start the full stack (Go CMS, PostgreSQL, MySQL, MongoDB, Redis, MinIO, and Prometheus) with a single command:
+Create and scaffold a brand new Go CMS project with a single command:
+
+```bash
+npx create-go-cms@latest my-project
+cd my-project
+npm run dev
+```
+
+### Option B: Native Go CLI
+
+Install the official Go CMS command-line binary:
+
+```bash
+go install github.com/go-cms/cms/cmd/go-cms@latest
+go-cms create my-project
+cd my-project
+go-cms develop
+```
+
+### Option C: Complete Docker Compose Stack
+
+Start the full stack (Go CMS, PostgreSQL, MySQL, MongoDB, Redis, MinIO, and Prometheus) with Docker Compose:
 
 ```bash
 docker compose up -d
 ```
 
-### Option B: Local Go Development
+### Option D: Local Go Monorepo Development
 
-#### 1. Prerequisites
-- **Go 1.24+**
-- **Node.js 18+** & **npm** (for building the admin dashboard)
-- PostgreSQL (or MySQL / MongoDB) running locally or via Docker
-
-#### 2. Start PostgreSQL & Redis via Docker
 ```bash
+# 1. Start database container
 docker compose up -d postgres redis
-```
 
-#### 3. Build the Admin Dashboard
-```bash
-cd admin
-npm install
-npm run build
-cd ..
-```
+# 2. Build the React admin dashboard
+npm --prefix admin run build
 
-#### 4. Run the Server
-```bash
-go run ./cmd/server
+# 3. Run the Go CMS server or CLI
+go run ./cmd/go-cms develop
 ```
 
 The CMS server will initialize database migrations, seed default roles and admin credentials, and start listening on `http://localhost:8080`.
+
+See the complete **[Installation Guide](docs/installation.md)** and **[CLI Reference](docs/cli.md)**.
 
 ---
 

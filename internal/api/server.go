@@ -2,18 +2,19 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"database/sql"
-	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-cms/cms/admin"
 	"github.com/go-cms/cms/internal/audit"
 	"github.com/go-cms/cms/internal/auth"
 	"github.com/go-cms/cms/internal/cache"
@@ -22,8 +23,6 @@ import (
 	"github.com/go-cms/cms/internal/database/interfaces"
 	"github.com/go-cms/cms/internal/database/migrations"
 	"github.com/go-cms/cms/internal/email"
-	"github.com/go-cms/cms/internal/usersperm"
-	"github.com/go-cms/cms/internal/webhooks"
 	"github.com/go-cms/cms/internal/jobs"
 	"github.com/go-cms/cms/internal/localization"
 	"github.com/go-cms/cms/internal/media"
@@ -34,6 +33,8 @@ import (
 	"github.com/go-cms/cms/internal/storage"
 	"github.com/go-cms/cms/internal/templates"
 	"github.com/go-cms/cms/internal/tenancy"
+	"github.com/go-cms/cms/internal/usersperm"
+	"github.com/go-cms/cms/internal/webhooks"
 )
 
 // Server wraps the HTTP router and http.Server instance.
@@ -765,34 +766,85 @@ func findAdminDist() string {
 	return ""
 }
 
-// mountAdminSPA mounts the static built React Admin SPA if admin/dist exists.
+// mountAdminSPA mounts the React Admin SPA from local disk if present, or from embedded FS.
 func mountAdminSPA(r chi.Router) {
 	distPath := findAdminDist()
-	if distPath == "" {
-		return
+	var embeddedFS http.FileSystem
+	var hasEmbedded bool
+
+	if distPath == "" && admin.HasEmbeddedAdmin() {
+		if sub, err := admin.SubFS(); err == nil {
+			embeddedFS = sub
+			hasEmbedded = true
+		}
 	}
 
-	fs := http.StripPrefix("/admin", http.FileServer(http.Dir(distPath)))
+	if distPath == "" && !hasEmbedded {
+		return
+	}
 
 	r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
 	})
 
-	r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
-		subpath := chi.URLParam(req, "*")
-		if subpath == "" || subpath == "/" {
+	if distPath != "" {
+		fs := http.StripPrefix("/admin", http.FileServer(http.Dir(distPath)))
+		r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+			subpath := chi.URLParam(req, "*")
+			if subpath == "" || subpath == "/" {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
+				return
+			}
+
+			cleanPath := strings.TrimPrefix(filepath.Clean(subpath), string(filepath.Separator))
+			targetFile := filepath.Join(distPath, cleanPath)
+			if info, err := os.Stat(targetFile); err == nil && !info.IsDir() {
+				if strings.HasPrefix(cleanPath, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				fs.ServeHTTP(w, req)
+				return
+			}
+
+			// Client-side SPA routing fallback
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
-			return
-		}
+		})
+	} else if hasEmbedded {
+		fs := http.StripPrefix("/admin", http.FileServer(embeddedFS))
+		r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+			subpath := chi.URLParam(req, "*")
+			if subpath == "" || subpath == "/" {
+				serveEmbeddedIndex(w, req)
+				return
+			}
 
-		cleanPath := strings.TrimPrefix(filepath.Clean(subpath), string(filepath.Separator))
-		targetFile := filepath.Join(distPath, cleanPath)
-		if info, err := os.Stat(targetFile); err == nil && !info.IsDir() {
-			fs.ServeHTTP(w, req)
-			return
-		}
+			cleanPath := strings.TrimPrefix(filepath.Clean(subpath), string(filepath.Separator))
+			cleanPath = strings.ReplaceAll(cleanPath, "\\", "/")
+			if f, err := embeddedFS.Open(cleanPath); err == nil {
+				_ = f.Close()
+				if strings.HasPrefix(cleanPath, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				fs.ServeHTTP(w, req)
+				return
+			}
 
-		// Client-side SPA routing fallback
-		http.ServeFile(w, req, filepath.Join(distPath, "index.html"))
-	})
+			// Client-side SPA routing fallback
+			serveEmbeddedIndex(w, req)
+		})
+	}
+}
+
+func serveEmbeddedIndex(w http.ResponseWriter, req *http.Request) {
+	bytes, err := admin.ReadIndexHTML()
+	if err != nil {
+		http.Error(w, "Admin UI not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(bytes)
 }

@@ -1,0 +1,37 @@
+{
+  "name": "create-go-cms",
+  "version": "0.1.0",
+  "description": "Interactive CLI to create Go CMS applications with one command",
+  "main": "lib/index.js",
+  "bin": {
+    "create-go-cms": "./bin/index.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "scripts": {
+    "test": "node bin/index.js --help"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/go-cms/cms.git",
+    "directory": "packages/create-go-cms"
+  },
+  "keywords": [
+    "go-cms",
+    "cms",
+    "strapi",
+    "nextjs",
+    "gutenberg",
+    "golang",
+    "headless-cms"
+  ],
+  "author": "Go CMS Contributors",
+  "license": "MIT"
+}
+

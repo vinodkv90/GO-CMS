@@ -174,6 +174,7 @@ func DefaultConfig() *Config {
 
 // Load loads configuration from an optional file and applies environment variable overrides.
 func Load(configPath string) (*Config, error) {
+	loadDotEnv(".env")
 	cfg := DefaultConfig()
 
 	if configPath == "" {
@@ -199,6 +200,34 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadDotEnv parses a .env file and sets environment variables if not already set.
+func loadDotEnv(filename string) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if (strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`)) ||
+			(strings.HasPrefix(val, `'`) && strings.HasSuffix(val, `'`)) {
+			val = val[1 : len(val)-1]
+		}
+		if os.Getenv(key) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
 }
 
 // applyEnvOverrides allows overriding config values with CMS_* environment variables.

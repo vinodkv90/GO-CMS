@@ -9,18 +9,17 @@ COPY admin/ ./
 RUN npm run build
 
 # Stage 2: Build Go binaries
-FROM golang:1.26.10-alpine AS go-builder
+FROM golang:1.24-alpine AS go-builder
 WORKDIR /app
 RUN apk add --no-cache git ca-certificates tzdata
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# Copy compiled React admin SPA for embed.FS compilation
+COPY --from=admin-builder /app/admin/dist ./admin/dist
+RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-w -s -extldflags '-static'" \
-    -o /bin/cms-server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s -extldflags '-static'" \
-    -o /bin/cms-migrate ./cmd/migrate
+    -o /bin/go-cms ./cmd/go-cms
 
 # Stage 3: Minimal hardened runtime image
 FROM alpine:3.21
@@ -30,12 +29,8 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-# Copy binaries
-COPY --from=go-builder /bin/cms-server /app/cms-server
-COPY --from=go-builder /bin/cms-migrate /app/cms-migrate
-
-# Copy compiled React admin SPA
-COPY --from=admin-builder /app/admin/dist /app/admin/dist
+# Copy unified Go CMS executable
+COPY --from=go-builder /bin/go-cms /app/go-cms
 
 # Copy configuration, default themes, plugins, and OpenAPI specs
 COPY --chown=appuser:appgroup config.example.yaml /app/config.yaml
@@ -51,5 +46,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
 
-ENTRYPOINT ["/app/cms-server"]
-CMD ["-config", "/app/config.yaml"]
+ENTRYPOINT ["/app/go-cms"]
+CMD ["start", "--config", "/app/config.yaml"]
