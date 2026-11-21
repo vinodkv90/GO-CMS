@@ -1,6 +1,6 @@
 {
   "name": "create-go-cms",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Interactive CLI to create Go CMS applications with one command",
   "main": "lib/index.js",
   "bin": {

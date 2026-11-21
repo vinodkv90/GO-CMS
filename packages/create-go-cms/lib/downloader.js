@@ -12,12 +12,19 @@ const DEFAULT_VERSION = '0.1.0';
  * Checks if a valid go-cms binary is already present locally.
  */
 function findLocalBinary(binaryName) {
-  // 1. Check parent repository bin folder (development mode)
+  // 1. Check parent repository bin folder (development mode) and GOPATH bin
+  const userHome = process.env.USERPROFILE || process.env.HOME || '';
+  const gopath = process.env.GOPATH || (userHome ? path.join(userHome, 'go') : '');
+
   const candidateDevPaths = [
     path.resolve(__dirname, '../../../bin', binaryName),
     path.resolve(__dirname, '../../bin', binaryName),
     path.resolve(process.cwd(), 'bin', binaryName),
   ];
+
+  if (gopath) {
+    candidateDevPaths.push(path.join(gopath, 'bin', binaryName));
+  }
 
   for (const c of candidateDevPaths) {
     if (fs.existsSync(c)) {
@@ -154,10 +161,32 @@ async function ensureBinary(destDir, platformInfo, version = DEFAULT_VERSION) {
     if (fs.existsSync(tempArchive)) fs.unlinkSync(tempArchive);
     if (fs.existsSync(tempChecksums)) fs.unlinkSync(tempChecksums);
 
+    // Fallback: If Go is installed locally, attempt to build or install it on the fly
+    try {
+      const whichCmd = platformInfo.isWindows ? 'where go' : 'which go';
+      execSync(whichCmd, { stdio: ['ignore', 'ignore', 'ignore'] });
+      console.log('⚡ Attempting local build with Go toolchain...');
+
+      const userHome = process.env.USERPROFILE || process.env.HOME || '';
+      const gopath = process.env.GOPATH || (userHome ? path.join(userHome, 'go') : '');
+      const goInstalledBin = gopath ? path.join(gopath, 'bin', platformInfo.binaryName) : '';
+
+      if (goInstalledBin && fs.existsSync(goInstalledBin)) {
+        fs.copyFileSync(goInstalledBin, targetBinaryPath);
+        return targetBinaryPath;
+      }
+
+      execSync(`go install github.com/${REPO_OWNER}/${REPO_NAME}/cmd/go-cms@latest`, { stdio: 'inherit' });
+      if (goInstalledBin && fs.existsSync(goInstalledBin)) {
+        fs.copyFileSync(goInstalledBin, targetBinaryPath);
+        return targetBinaryPath;
+      }
+    } catch {}
+
     throw new Error(
       `Failed to install Go CMS binary: ${err.message}\n` +
       `You can build or install the native binary manually:\n` +
-      `  go install github.com/go-cms/cms/cmd/go-cms@latest\n` +
+      `  go install github.com/${REPO_OWNER}/${REPO_NAME}/cmd/go-cms@latest\n` +
       `or copy go-cms into your project's bin/ folder.`
     );
   }
