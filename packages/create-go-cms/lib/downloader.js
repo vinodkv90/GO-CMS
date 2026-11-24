@@ -89,8 +89,6 @@ function downloadFile(url, destPath) {
     });
   });
 }
-  });
-}
 
 /**
  * Verifies SHA-256 hash of a file against expected checksum.
