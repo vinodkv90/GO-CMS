@@ -52,7 +52,16 @@ function findLocalBinary(binaryName) {
  */
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, (response) => {
+    const urlObj = new URL(url);
+    const headers = {
+      'User-Agent': 'create-go-cms'
+    };
+    const ghToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    if (ghToken && urlObj.hostname === 'github.com') {
+      headers['Authorization'] = `Bearer ${ghToken}`;
+    }
+
+    const request = https.get(url, { headers }, (response) => {
       // Follow HTTP 301/302 redirects
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         return resolve(downloadFile(response.headers.location, destPath));
@@ -78,6 +87,8 @@ function downloadFile(url, destPath) {
       fs.unlink(destPath, () => {});
       reject(err);
     });
+  });
+}
   });
 }
 

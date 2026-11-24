@@ -61,8 +61,8 @@ changelog:
 
 release:
   github:
-    owner: go-cms
-    name: cms
+    owner: vinodkv90
+    name: GO-CMS
   draft: false
   prerelease: auto
   mode: replace
